@@ -42,7 +42,7 @@ export function Sidebar({ isAdmin = false, unassignedCount = 0 }: Props) {
     <aside className="w-56 shrink-0 bg-white border-r border-border flex flex-col h-screen sticky top-0">
       <div className="px-4 py-5 border-b border-border">
         <div className="text-sm font-bold text-primary leading-tight">支払通知集計</div>
-        <div className="text-xs text-muted-foreground mt-0.5">双建工業株式会社</div>
+        <div className="text-xs text-muted-foreground mt-0.5">Trustive Works</div>
       </div>
 
       {unassignedCount > 0 && (
