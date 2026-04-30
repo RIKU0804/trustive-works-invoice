@@ -11,7 +11,7 @@ const notoSansJP = Noto_Sans_JP({
 
 export const metadata: Metadata = {
   title: "支払い通知書集計",
-  description: "旭化成ホームズ支払い通知書 自動集計システム",
+  description: "支払い通知書 自動集計システム",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
