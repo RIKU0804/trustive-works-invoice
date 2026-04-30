@@ -1,0 +1,39 @@
+# Build outputs
+.next
+out
+dist
+build
+
+# Dependencies
+node_modules
+
+# Environment / secrets — env vars are passed in via docker compose
+.env
+.env.local
+.env.*.local
+
+# Testing / dev tools
+playwright-report
+test-results
+coverage
+*.log
+
+# Editor / OS
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# Source control / CI
+.git
+.gitignore
+.github
+
+# Docs / scripts not needed at build time
+README.md
+*.md
+scripts
+
+# Temp tsbuildinfo
+tsconfig.tsbuildinfo
+next-env.d.ts

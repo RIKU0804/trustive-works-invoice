@@ -1,0 +1,9 @@
+# Never commit real secrets.
+.env
+.env.backup.*
+.env.*.local
+
+# Bind-mounted runtime data (we use named volumes, but just in case)
+data/
+volumes/db/init/*.sql
+!volumes/db/init/.gitkeep

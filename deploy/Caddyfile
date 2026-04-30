@@ -1,0 +1,89 @@
+# Caddy automatic HTTPS (Let's Encrypt) reverse proxy.
+# Domains are pulled from environment variables defined in deploy/.env.
+#
+# Layout:
+#   ${DOMAIN}         -> Next.js  web:3000           (the app itself)
+#   ${API_DOMAIN}     -> Kong     kong:8000          (Supabase API gateway)
+#   ${STUDIO_DOMAIN}  -> Kong     kong:8000  /       (Studio admin, basic-auth)
+#
+# Request body sizes: PDF uploads can be big; lift the limit.
+
+{
+	email {$ACME_EMAIL}
+	# servers { protocols h1 h2 h3 }   # uncomment once you've validated TLS
+}
+
+# ─── Web app ────────────────────────────────────────────────────────────────
+{$DOMAIN} {
+	encode zstd gzip
+
+	# Long-lived assets
+	@static path_regexp static ^/(_next/static|favicon\.ico|robots\.txt)
+	header @static Cache-Control "public, max-age=31536000, immutable"
+
+	# Security headers (Next.js also sets some — these are belt-and-suspenders)
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options    "nosniff"
+		Referrer-Policy           "strict-origin-when-cross-origin"
+		Permissions-Policy        "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
+	reverse_proxy web:3000 {
+		header_up Host {host}
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+}
+
+# ─── Supabase API (kong) ────────────────────────────────────────────────────
+{$API_DOMAIN} {
+	encode zstd gzip
+
+	# Allow large PDFs / Excel through to storage
+	request_body {
+		max_size 100MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options    "nosniff"
+		-Server
+	}
+
+	# WebSocket upgrade for Supabase Realtime
+	@websockets {
+		header Connection *Upgrade*
+		header Upgrade    websocket
+	}
+
+	reverse_proxy kong:8000 {
+		header_up Host {host}
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		flush_interval -1
+	}
+}
+
+# ─── Supabase Studio (admin) ────────────────────────────────────────────────
+# Studio is exposed via the same kong gateway: kong's catch-all `/` route maps
+# to the studio container, with HTTP basic-auth protecting it.
+{$STUDIO_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options    "nosniff"
+		-Server
+	}
+
+	reverse_proxy kong:8000 {
+		header_up Host {host}
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+}

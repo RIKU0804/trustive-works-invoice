@@ -1,0 +1,426 @@
+# Self-hosted Supabase + Invoice SaaS Stack
+# Based on https://github.com/supabase/supabase/blob/master/docker/docker-compose.yml
+#
+# Usage:
+#   1) cp .env.example .env  &&  edit values  (or run ./init.sh)
+#   2) docker compose -f deploy/docker-compose.yml up -d
+#
+# Architecture:
+#   [Caddy/nginx] -> kong:8000 (Supabase API)  -> auth/rest/realtime/storage
+#                 -> web:3000 (Next.js)        -> kong (server-side calls)
+#                                              -> python-api (analyze PDF)
+#                 -> python-api:8001 (FastAPI) -> kong (storage / auth)
+
+name: invoice-saas
+
+networks:
+  invoice-net:
+    driver: bridge
+
+volumes:
+  db-data:
+  storage-data:
+  api-data:
+  caddy-data:
+  caddy-config:
+
+services:
+  # ──────────────────────────────────────────────────────────────────────────
+  # Supabase: Postgres
+  # ──────────────────────────────────────────────────────────────────────────
+  db:
+    image: supabase/postgres:15.8.1.060
+    container_name: supabase-db
+    restart: unless-stopped
+    networks: [invoice-net]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    environment:
+      POSTGRES_HOST: /var/run/postgresql
+      PGPORT: 5432
+      POSTGRES_PORT: 5432
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: postgres
+      POSTGRES_DB: postgres
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXP: 3600
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ../apps/web/supabase/migrations:/docker-entrypoint-initdb.d/migrations:ro
+      - ./volumes/db/init:/docker-entrypoint-initdb.d:ro
+    command:
+      - postgres
+      - -c
+      - config_file=/etc/postgresql/postgresql.conf
+      - -c
+      - log_min_messages=fatal
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Supabase: GoTrue (Auth)
+  # ──────────────────────────────────────────────────────────────────────────
+  auth:
+    image: supabase/gotrue:v2.177.0
+    container_name: supabase-auth
+    restart: unless-stopped
+    networks: [invoice-net]
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9999/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+      API_EXTERNAL_URL: ${API_EXTERNAL_URL}
+
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${POSTGRES_PASSWORD}@db:5432/postgres
+
+      GOTRUE_SITE_URL: ${SITE_URL}
+      GOTRUE_URI_ALLOW_LIST: ${ADDITIONAL_REDIRECT_URLS}
+      GOTRUE_DISABLE_SIGNUP: ${DISABLE_SIGNUP:-false}
+
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_EXP: 3600
+      GOTRUE_JWT_SECRET: ${JWT_SECRET}
+
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: ${ENABLE_EMAIL_SIGNUP:-true}
+      GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED: "false"
+      GOTRUE_MAILER_AUTOCONFIRM: ${ENABLE_EMAIL_AUTOCONFIRM:-false}
+
+      GOTRUE_SMTP_ADMIN_EMAIL: ${SMTP_ADMIN_EMAIL:-}
+      GOTRUE_SMTP_HOST: ${SMTP_HOST:-}
+      GOTRUE_SMTP_PORT: ${SMTP_PORT:-}
+      GOTRUE_SMTP_USER: ${SMTP_USER:-}
+      GOTRUE_SMTP_PASS: ${SMTP_PASS:-}
+      GOTRUE_SMTP_SENDER_NAME: ${SMTP_SENDER_NAME:-}
+
+      GOTRUE_EXTERNAL_GOOGLE_ENABLED: ${ENABLE_GOOGLE_OAUTH:-true}
+      GOTRUE_EXTERNAL_GOOGLE_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOTRUE_EXTERNAL_GOOGLE_SECRET: ${GOOGLE_OAUTH_SECRET:-}
+      GOTRUE_EXTERNAL_GOOGLE_REDIRECT_URI: ${API_EXTERNAL_URL}/auth/v1/callback
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Supabase: PostgREST
+  # ──────────────────────────────────────────────────────────────────────────
+  rest:
+    image: postgrest/postgrest:v12.2.12
+    container_name: supabase-rest
+    restart: unless-stopped
+    networks: [invoice-net]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGRST_DB_URI: postgres://authenticator:${POSTGRES_PASSWORD}@db:5432/postgres
+      PGRST_DB_SCHEMAS: public,storage,graphql_public
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+      PGRST_APP_SETTINGS_JWT_SECRET: ${JWT_SECRET}
+      PGRST_APP_SETTINGS_JWT_EXP: 3600
+    command: ["postgrest"]
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Supabase: Realtime
+  # ──────────────────────────────────────────────────────────────────────────
+  realtime:
+    image: supabase/realtime:v2.34.43
+    container_name: supabase-realtime
+    restart: unless-stopped
+    networks: [invoice-net]
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sSfL", "--head", "-o", "/dev/null", "-H", "Authorization: Bearer ${ANON_KEY}", "http://localhost:4000/api/tenants/realtime-dev/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    environment:
+      PORT: 4000
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: supabase_admin
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: postgres
+      DB_AFTER_CONNECT_QUERY: "SET search_path TO _realtime"
+      DB_ENC_KEY: supabaserealtime
+      API_JWT_SECRET: ${JWT_SECRET}
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      ERL_AFLAGS: -proto_dist inet_tcp
+      DNS_NODES: "''"
+      RLIMIT_NOFILE: "10000"
+      APP_NAME: realtime
+      SEED_SELF_HOST: "true"
+      RUN_JANITOR: "true"
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Supabase: Storage
+  # ──────────────────────────────────────────────────────────────────────────
+  storage:
+    image: supabase/storage-api:v1.27.4
+    container_name: supabase-storage
+    restart: unless-stopped
+    networks: [invoice-net]
+    depends_on:
+      db:
+        condition: service_healthy
+      rest:
+        condition: service_started
+      imgproxy:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    environment:
+      ANON_KEY: ${ANON_KEY}
+      SERVICE_KEY: ${SERVICE_ROLE_KEY}
+      POSTGREST_URL: http://rest:3000
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      DATABASE_URL: postgres://supabase_storage_admin:${POSTGRES_PASSWORD}@db:5432/postgres
+      FILE_SIZE_LIMIT: "52428800"
+      STORAGE_BACKEND: file
+      FILE_STORAGE_BACKEND_PATH: /var/lib/storage
+      TENANT_ID: stub
+      REGION: stub
+      GLOBAL_S3_BUCKET: stub
+      ENABLE_IMAGE_TRANSFORMATION: "true"
+      IMGPROXY_URL: http://imgproxy:5001
+    volumes:
+      - storage-data:/var/lib/storage:z
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Supabase: imgproxy (image transformation)
+  # ──────────────────────────────────────────────────────────────────────────
+  imgproxy:
+    image: darthsim/imgproxy:v3.8.0
+    container_name: supabase-imgproxy
+    restart: unless-stopped
+    networks: [invoice-net]
+    healthcheck:
+      test: ["CMD", "imgproxy", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    environment:
+      IMGPROXY_BIND: ":5001"
+      IMGPROXY_LOCAL_FILESYSTEM_ROOT: /
+      IMGPROXY_USE_ETAG: "true"
+      IMGPROXY_ENABLE_WEBP_DETECTION: "true"
+    volumes:
+      - storage-data:/var/lib/storage:z
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Supabase: postgres-meta (used by Studio)
+  # ──────────────────────────────────────────────────────────────────────────
+  meta:
+    image: supabase/postgres-meta:v0.91.4
+    container_name: supabase-meta
+    restart: unless-stopped
+    networks: [invoice-net]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PG_META_PORT: 8080
+      PG_META_DB_HOST: db
+      PG_META_DB_PORT: 5432
+      PG_META_DB_NAME: postgres
+      PG_META_DB_USER: supabase_admin
+      PG_META_DB_PASSWORD: ${POSTGRES_PASSWORD}
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Supabase: Studio (admin dashboard)
+  # ──────────────────────────────────────────────────────────────────────────
+  studio:
+    image: supabase/studio:2025.10.07-sha-21ec2cd
+    container_name: supabase-studio
+    restart: unless-stopped
+    networks: [invoice-net]
+    depends_on:
+      meta:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/platform/profile').then(r=>{if(r.status!==200)throw new Error()})"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    environment:
+      STUDIO_PG_META_URL: http://meta:8080
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
+      DEFAULT_ORGANIZATION_NAME: ${STUDIO_DEFAULT_ORGANIZATION:-Invoice SaaS}
+      DEFAULT_PROJECT_NAME: ${STUDIO_DEFAULT_PROJECT:-Invoice SaaS}
+
+      SUPABASE_URL: http://kong:8000
+      SUPABASE_PUBLIC_URL: ${API_EXTERNAL_URL}
+      SUPABASE_ANON_KEY: ${ANON_KEY}
+      SUPABASE_SERVICE_KEY: ${SERVICE_ROLE_KEY}
+      AUTH_JWT_SECRET: ${JWT_SECRET}
+
+      LOGFLARE_URL: http://analytics:4000
+      LOGFLARE_PUBLIC_ACCESS_TOKEN: ${LOGFLARE_PUBLIC_ACCESS_TOKEN:-}
+      LOGFLARE_PRIVATE_ACCESS_TOKEN: ${LOGFLARE_PRIVATE_ACCESS_TOKEN:-}
+      NEXT_PUBLIC_ENABLE_LOGS: "false"
+      NEXT_ANALYTICS_BACKEND_PROVIDER: postgres
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Supabase: Kong API Gateway
+  # ──────────────────────────────────────────────────────────────────────────
+  kong:
+    image: kong:2.8.1
+    container_name: supabase-kong
+    restart: unless-stopped
+    networks: [invoice-net]
+    depends_on:
+      auth:
+        condition: service_started
+      rest:
+        condition: service_started
+      realtime:
+        condition: service_started
+      storage:
+        condition: service_started
+      meta:
+        condition: service_started
+      studio:
+        condition: service_started
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /home/kong/kong.yml
+      KONG_DNS_ORDER: LAST,A,CNAME
+      KONG_PLUGINS: request-transformer,cors,key-auth,acl,basic-auth
+      KONG_NGINX_PROXY_PROXY_BUFFER_SIZE: 160k
+      KONG_NGINX_PROXY_PROXY_BUFFERS: 64 160k
+      SUPABASE_ANON_KEY: ${ANON_KEY}
+      SUPABASE_SERVICE_KEY: ${SERVICE_ROLE_KEY}
+      DASHBOARD_USERNAME: ${DASHBOARD_USERNAME}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD}
+    volumes:
+      - ./volumes/kong.yml:/home/kong/temp.yml:ro
+    # Kong needs env-substitution into kong.yml; do it at startup.
+    entrypoint: >
+      bash -c "
+      eval \"echo \\\"$$(cat /home/kong/temp.yml)\\\"\" > /home/kong/kong.yml
+      && /docker-entrypoint.sh kong docker-start
+      "
+    # Only kong is exposed externally (everything else is reverse-proxied through it).
+    ports:
+      - "${KONG_HTTP_PORT:-8000}:8000/tcp"
+      - "${KONG_HTTPS_PORT:-8443}:8443/tcp"
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Application: Python API (FastAPI)
+  # ──────────────────────────────────────────────────────────────────────────
+  python-api:
+    build:
+      context: ../apps/api
+      dockerfile: Dockerfile
+    image: invoice-saas-api:local
+    container_name: invoice-python-api
+    restart: unless-stopped
+    networks: [invoice-net]
+    depends_on:
+      kong:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8001/health',timeout=3).getcode()==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    environment:
+      PORT: 8001
+      API_KEY: ${PYTHON_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # Internal Supabase URL (kong is the gateway inside the network)
+      SUPABASE_URL: http://kong:8000
+      SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
+      DEBUG: "false"
+    volumes:
+      - api-data:/app/data
+    expose:
+      - "8001"
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Application: Next.js Web
+  # ──────────────────────────────────────────────────────────────────────────
+  web:
+    build:
+      context: ../apps/web
+      dockerfile: Dockerfile
+      args:
+        # NEXT_PUBLIC_* must be baked into the build because they get inlined
+        # into the client bundle.
+        NEXT_PUBLIC_SUPABASE_URL: ${API_EXTERNAL_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${ANON_KEY}
+    image: invoice-saas-web:local
+    container_name: invoice-web
+    restart: unless-stopped
+    networks: [invoice-net]
+    depends_on:
+      kong:
+        condition: service_started
+      python-api:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+      # Public values (browser-visible, baked in at build, also re-exposed runtime)
+      NEXT_PUBLIC_SUPABASE_URL: ${API_EXTERNAL_URL}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${ANON_KEY}
+      # Server-only (Next.js server actions / route handlers)
+      SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
+      PYTHON_API_URL: http://python-api:8001
+      PYTHON_API_KEY: ${PYTHON_API_KEY}
+      SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET: ${GOOGLE_OAUTH_SECRET:-}
+    expose:
+      - "3000"
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Edge: Caddy reverse proxy + TLS (optional, recommended)
+  # Disable by removing this service or setting profile.
+  # ──────────────────────────────────────────────────────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    container_name: invoice-caddy
+    restart: unless-stopped
+    networks: [invoice-net]
+    depends_on:
+      web:
+        condition: service_started
+      kong:
+        condition: service_started
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN}
+      API_DOMAIN: ${API_DOMAIN}
+      STUDIO_DOMAIN: ${STUDIO_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    profiles: ["with-tls"]
