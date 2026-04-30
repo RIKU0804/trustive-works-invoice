@@ -29,7 +29,7 @@ function buildSample(propertiesCount) {
       amountShaho: 2000 + i * 100,
       amountSeisanka: 5000 + i * 200,
       amountMaterial: 300000 + i * 5000,
-      staffName: ["山本", "熱田", "安保", null][i % 4],
+      staffName: ["担当A", "担当B", "担当C", null][i % 4],
     });
   }
   return properties;

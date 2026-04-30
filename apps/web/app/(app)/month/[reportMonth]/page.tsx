@@ -5,8 +5,6 @@ import { MonthGrid, type PropertyRow, type StaffOption } from "./MonthGrid";
 
 type Params = { reportMonth: string };
 
-const STAFF_NAMES = ["山本", "熱田", "安保"];
-
 function fmtJpy(n: number | null | undefined): string {
   if (n == null) return "—";
   return Math.round(Number(n)).toLocaleString();
@@ -100,12 +98,12 @@ export default async function MonthDetailPage({ params }: { params: Params }) {
   const totalGrossProfit = rows.reduce((s, p) => s + p.amountGrossProfit, 0);
   const totalGrossProfitRate = totalSales > 0 ? totalGrossProfit / totalSales : 0;
 
-  // 班長別集計
-  const staffSummary = STAFF_NAMES.map((name) => {
-    const ofStaff = rows.filter((p) => p.staffName === name);
+  // 班長別集計（DB登録の有効担当者ベース）
+  const staffSummary = staffOptions.map((s) => {
+    const ofStaff = rows.filter((p) => p.staffName === s.name);
     return {
-      name,
-      grossProfit: ofStaff.reduce((s, p) => s + p.amountGrossProfit, 0),
+      name: s.name,
+      grossProfit: ofStaff.reduce((acc, p) => acc + p.amountGrossProfit, 0),
       count: ofStaff.length,
     };
   });

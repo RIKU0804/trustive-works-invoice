@@ -1,6 +1,6 @@
 # invoice-saas2
 
-支払通知書PDFを自動集計するSaaS。双建工業株式会社向け。
+支払通知書PDFを自動集計するSaaS。
 
 ## アーキテクチャ
 - **Web**: Next.js 14 (App Router) on Vercel

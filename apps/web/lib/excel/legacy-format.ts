@@ -19,8 +19,8 @@ const DATA_START_ROW = 5;
 /** 既定の邸数枠（既存ツールが18邸を基準にしているため） */
 const DEFAULT_TEI_CAPACITY = 18;
 
-/** 担当者プルダウン候補 */
-const STAFF_OPTIONS = ["山本", "熱田", "安保"] as const;
+/** 担当者プルダウン候補のフォールバック（実運用ではDBから注入される） */
+const DEFAULT_STAFF_OPTIONS: readonly string[] = [];
 
 /** 数値フォーマット（既存ツール互換: マイナスは赤＋▲） */
 const NUMBER_FORMAT = '#,##0;[Red]▲#,##0';
@@ -28,23 +28,21 @@ const NUMBER_FORMAT = '#,##0;[Red]▲#,##0';
 /** パーセント表示（小数1桁） */
 const PERCENT_FORMAT = '0.0%';
 
-/** 担当邸数集計位置 */
+/** 担当邸数集計位置（先頭3名分 + 未入力 + 合計） */
 const TANTO_TEISU_RANGE = {
   titleCell: "N3",
   headerRow: 4,
-  yamamotoRow: 5,
-  atsutaRow: 6,
-  amboRow: 7,
+  staffStartRow: 5,    // 先頭3名分の表示行（5,6,7）
   unassignedRow: 8,
   totalRow: 9,
 };
 
-/** 班長別配色（条件付き書式用） */
-const STAFF_COLORS: Record<string, { font: string; fill: string }> = {
-  山本: { font: "FF0F5132", fill: "FFD1E7DD" }, // 緑
-  熱田: { font: "FF8A4B00", fill: "FFFCE5C2" }, // オレンジ
-  安保: { font: "FF0B3D91", fill: "FFCFE2FF" }, // 青
-};
+/** 班長別配色のパレット（DB のstaff順に割り当てる） */
+const STAFF_COLOR_PALETTE: Array<{ font: string; fill: string }> = [
+  { font: "FF0F5132", fill: "FFD1E7DD" }, // 緑
+  { font: "FF8A4B00", fill: "FFFCE5C2" }, // オレンジ
+  { font: "FF0B3D91", fill: "FFCFE2FF" }, // 青
+];
 
 // ----------------------------------------------------------------------
 // 型
@@ -78,6 +76,8 @@ export interface LegacyExportInput {
   monthlyMemo?: string | null;
   /** 邸別データ */
   properties: LegacyPropertyRow[];
+  /** 担当者リスト（DBから取得・表示順で渡す） */
+  staffOptions?: readonly string[];
 }
 
 // ----------------------------------------------------------------------
@@ -131,6 +131,7 @@ function buildSheet(sheet: ExcelJS.Worksheet, input: LegacyExportInput): void {
   const dataLastRow = DATA_START_ROW + teiCount - 1; // 例: 18邸なら 22
   const sumRow = dataLastRow + 1; // 例: 23
   const usedRowCount = input.properties.length;
+  const staffOptions = input.staffOptions ?? DEFAULT_STAFF_OPTIONS;
 
   configureColumns(sheet);
   writeTitle(sheet, input);
@@ -138,12 +139,12 @@ function buildSheet(sheet: ExcelJS.Worksheet, input: LegacyExportInput): void {
   writeDataRows(sheet, input.properties, dataLastRow);
   writeSumRow(sheet, sumRow, dataLastRow);
   writeBottomTotals(sheet, sumRow, dataLastRow);
-  writeStaffSummary(sheet, sumRow, dataLastRow);
-  writeTantoTeisu(sheet, dataLastRow);
+  writeStaffSummary(sheet, sumRow, dataLastRow, staffOptions);
+  writeTantoTeisu(sheet, dataLastRow, staffOptions);
   writeTransferReconciliation(sheet, sumRow, input);
   writeMonthlyMemo(sheet, sumRow, input.monthlyMemo);
-  applyDataValidation(sheet, dataLastRow);
-  applyConditionalFormatting(sheet, dataLastRow, usedRowCount);
+  applyDataValidation(sheet, dataLastRow, staffOptions);
+  applyConditionalFormatting(sheet, dataLastRow, usedRowCount, staffOptions);
 }
 
 // ----------------------------------------------------------------------
@@ -395,11 +396,12 @@ function writeBottomTotals(
 function writeStaffSummary(
   sheet: ExcelJS.Worksheet,
   sumRow: number,
-  dataLastRow: number
+  dataLastRow: number,
+  staffOptions: readonly string[]
 ): void {
   const startRow = sumRow + 5;
 
-  STAFF_OPTIONS.forEach((staff, idx) => {
+  staffOptions.forEach((staff, idx) => {
     const r = startRow + idx;
     sheet.getCell(`K${r}`).value = staff;
     sheet.getCell(`K${r}`).font = { bold: true };
@@ -418,8 +420,12 @@ function writeStaffSummary(
 // 担当邸数 N3:O9
 // ----------------------------------------------------------------------
 
-function writeTantoTeisu(sheet: ExcelJS.Worksheet, dataLastRow: number): void {
-  const { titleCell, headerRow, yamamotoRow, atsutaRow, amboRow, unassignedRow, totalRow } =
+function writeTantoTeisu(
+  sheet: ExcelJS.Worksheet,
+  dataLastRow: number,
+  staffOptions: readonly string[]
+): void {
+  const { titleCell, headerRow, staffStartRow, unassignedRow, totalRow } =
     TANTO_TEISU_RANGE;
 
   sheet.getCell(titleCell).value = "【担当邸数】";
@@ -432,16 +438,18 @@ function writeTantoTeisu(sheet: ExcelJS.Worksheet, dataLastRow: number): void {
   sheet.getCell(`N${headerRow}`).alignment = { horizontal: "center" };
   sheet.getCell(`O${headerRow}`).alignment = { horizontal: "center" };
 
-  // 班長名
-  sheet.getCell(`N${yamamotoRow}`).value = "山本";
-  sheet.getCell(`N${atsutaRow}`).value = "熱田";
-  sheet.getCell(`N${amboRow}`).value = "安保";
+  // 先頭3名分の班長名（足りなければ空欄）
+  const firstThree = staffOptions.slice(0, 3);
+  const staffRows = [staffStartRow, staffStartRow + 1, staffStartRow + 2];
+  staffRows.forEach((row, idx) => {
+    sheet.getCell(`N${row}`).value = firstThree[idx] ?? "";
+  });
   sheet.getCell(`N${unassignedRow}`).value = "未入力";
   sheet.getCell(`N${totalRow}`).value = "合計";
   sheet.getCell(`N${totalRow}`).font = { bold: true };
 
   // O5:O7 = COUNTIF(K5:K{n}, N{r})
-  for (const r of [yamamotoRow, atsutaRow, amboRow]) {
+  for (const r of staffRows) {
     sheet.getCell(`O${r}`).value = {
       formula: `COUNTIF(K${DATA_START_ROW}:K${dataLastRow},N${r})`,
       result: 0,
@@ -458,7 +466,7 @@ function writeTantoTeisu(sheet: ExcelJS.Worksheet, dataLastRow: number): void {
 
   // O9 = SUM(O5:O8)
   sheet.getCell(`O${totalRow}`).value = {
-    formula: `SUM(O${yamamotoRow}:O${unassignedRow})`,
+    formula: `SUM(O${staffStartRow}:O${unassignedRow})`,
     result: 0,
   };
   sheet.getCell(`O${totalRow}`).alignment = { horizontal: "right" };
@@ -582,15 +590,21 @@ function writeMonthlyMemo(
 // 入力規則（K列プルダウン）
 // ----------------------------------------------------------------------
 
-function applyDataValidation(sheet: ExcelJS.Worksheet, dataLastRow: number): void {
+function applyDataValidation(
+  sheet: ExcelJS.Worksheet,
+  dataLastRow: number,
+  staffOptions: readonly string[]
+): void {
+  if (staffOptions.length === 0) return;
+  const list = staffOptions.join(",");
   for (let r = DATA_START_ROW; r <= dataLastRow; r++) {
     sheet.getCell(`K${r}`).dataValidation = {
       type: "list",
       allowBlank: true,
-      formulae: [`"${STAFF_OPTIONS.join(",")}"`],
+      formulae: [`"${list}"`],
       showErrorMessage: true,
       errorTitle: "班長名エラー",
-      error: `${STAFF_OPTIONS.join(" / ")} から選んでください`,
+      error: `${staffOptions.join(" / ")} から選んでください`,
     };
   }
 }
@@ -602,7 +616,8 @@ function applyDataValidation(sheet: ExcelJS.Worksheet, dataLastRow: number): voi
 function applyConditionalFormatting(
   sheet: ExcelJS.Worksheet,
   dataLastRow: number,
-  usedRowCount: number
+  usedRowCount: number,
+  staffOptions: readonly string[]
 ): void {
   // 班長未入力（K列が空 かつ B列が埋まっている）→ 薄黄
   sheet.addConditionalFormatting({
@@ -619,9 +634,9 @@ function applyConditionalFormatting(
     ],
   });
 
-  // 班長別の色分け（K列）
-  const staffEntries = Object.entries(STAFF_COLORS);
-  staffEntries.forEach(([staff, colors], idx) => {
+  // 班長別の色分け（K列） — DBの並び順にパレットを割り当て
+  staffOptions.forEach((staff, idx) => {
+    const colors = STAFF_COLOR_PALETTE[idx % STAFF_COLOR_PALETTE.length];
     sheet.addConditionalFormatting({
       ref: `K${DATA_START_ROW}:K${dataLastRow}`,
       rules: [

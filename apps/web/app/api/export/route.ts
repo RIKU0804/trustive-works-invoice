@@ -128,7 +128,17 @@ export async function GET(req: NextRequest) {
     return buildCsvResponse(properties, month);
   }
 
-  return await buildXlsxResponse(properties, month, monthlyMemo);
+  // 担当者リストをDBから取得して legacy format に渡す（ハードコード回避）
+  const { data: staffRows } = await supabase
+    .from("staff_members")
+    .select("name")
+    .eq("organization_id", membership.organization_id)
+    .eq("is_active", true)
+    .order("display_order");
+
+  const staffOptions = (staffRows ?? []).map((s) => s.name);
+
+  return await buildXlsxResponse(properties, month, monthlyMemo, staffOptions);
 }
 
 // ----------------------------------------------------------------------
@@ -197,7 +207,8 @@ function buildCsvResponse(properties: PropertyRow[], month: string): NextRespons
 async function buildXlsxResponse(
   properties: PropertyRow[],
   month: string,
-  monthlyMemo: string | null
+  monthlyMemo: string | null,
+  staffOptions: string[]
 ): Promise<NextResponse> {
   const firstNotice =
     properties.length > 0 ? pickFirstNotice(properties[0].payment_notices) : null;
@@ -220,6 +231,7 @@ async function buildXlsxResponse(
     offsetInclTax: firstNotice ? toNumber(firstNotice.offset_incl_tax) : null,
     monthlyMemo,
     properties: rows,
+    staffOptions,
   });
 
   const filename = buildLegacyFileName(month);
