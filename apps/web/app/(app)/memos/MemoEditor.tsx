@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { toast } from "sonner";
 import { upsertMemo } from "@/app/actions/memo";
 
 interface MemoEditorProps {
@@ -20,8 +21,9 @@ export function MemoEditor({ reportMonth, initialContent }: MemoEditorProps) {
       const data = new FormData(e.currentTarget);
       await upsertMemo(data);
       setIsEditing(false);
+      toast.success("月次メモを保存しました");
     } catch (err) {
-      alert(err instanceof Error ? err.message : "保存に失敗しました");
+      toast.error(err instanceof Error ? err.message : "保存に失敗しました");
     } finally {
       setPending(false);
     }

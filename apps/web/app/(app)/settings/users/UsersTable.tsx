@@ -30,11 +30,13 @@ const ROLE_OPTIONS: MemberRole[] = ["owner", "admin", "member"];
 
 function RoleSelect({
   membershipId,
+  email,
   currentRole,
   isDisabled,
   currentUserRole,
 }: {
   membershipId: string;
+  email: string;
   currentRole: MemberRole;
   isDisabled: boolean;
   currentUserRole: MemberRole;
@@ -48,13 +50,28 @@ function RoleSelect({
 
   function handleChange(e: React.ChangeEvent<HTMLSelectElement>) {
     const newRole = e.target.value as MemberRole;
+    const previousRole = selectedRole;
+
+    if (newRole === previousRole) return;
+
+    const confirmed = confirm(
+      `${email} の役割を ${ROLE_LABELS[previousRole]} → ${ROLE_LABELS[newRole]} に変更しますか？`
+    );
+    if (!confirmed) {
+      // ユーザーがキャンセルした場合、selectの値を元に戻す
+      e.target.value = previousRole;
+      return;
+    }
+
     setError(null);
+    setSelectedRole(newRole);
     startTransition(async () => {
       try {
         await updateMemberRole(membershipId, newRole);
-        setSelectedRole(newRole);
       } catch (err) {
         setError(err instanceof Error ? err.message : "更新に失敗しました");
+        // 失敗時は元のロールへ復元
+        setSelectedRole(previousRole);
       }
     });
   }
@@ -164,6 +181,7 @@ export function UsersTable({
                   {canManage && !isSelf ? (
                     <RoleSelect
                       membershipId={member.membershipId}
+                      email={member.email}
                       currentRole={member.role}
                       isDisabled={false}
                       currentUserRole={currentUserRole}

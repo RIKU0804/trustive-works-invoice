@@ -1,6 +1,7 @@
 "use client";
 
 import { useOptimistic, useTransition } from "react";
+import { toast } from "sonner";
 import { assignStaff } from "@/app/actions/staff";
 
 type Property = {
@@ -37,9 +38,45 @@ export function AssignTable({
 
   function handleChange(propertyId: string, value: string) {
     const staff = staffList.find((s) => s.id === value) ?? null;
+    const property = optimistic.find((p) => p.id === propertyId);
+    const propertyName = property?.propertyName ?? "物件";
+    const previousStaffId = property?.staffMemberId ?? null;
+    const previousStaffName = property?.staffMemberName ?? null;
+
     startTransition(async () => {
       updateOptimistic({ propertyId, staffId: value || null, staffName: staff?.name ?? null });
-      await assignStaff(propertyId, value || null);
+      try {
+        await assignStaff(propertyId, value || null);
+        toast.success(
+          staff
+            ? `${propertyName} を ${staff.name} に割当しました`
+            : `${propertyName} の担当者を解除しました`,
+          {
+            action: {
+              label: "元に戻す",
+              onClick: () => {
+                startTransition(async () => {
+                  updateOptimistic({
+                    propertyId,
+                    staffId: previousStaffId,
+                    staffName: previousStaffName,
+                  });
+                  try {
+                    await assignStaff(propertyId, previousStaffId);
+                    toast.success(`${propertyName} を元に戻しました`);
+                  } catch (err) {
+                    toast.error(
+                      err instanceof Error ? err.message : "元に戻すのに失敗しました"
+                    );
+                  }
+                });
+              },
+            },
+          }
+        );
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "割当に失敗しました");
+      }
     });
   }
 
