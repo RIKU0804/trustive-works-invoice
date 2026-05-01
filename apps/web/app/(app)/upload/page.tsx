@@ -31,6 +31,8 @@ export default function UploadPage() {
     setError(null);
     const formData = new FormData();
     formData.append("file", selectedFile);
+    // ファイル名は別フィールドで明示的にUTF-8文字列として送る（multipart filename のmojibake回避）
+    formData.append("originalFileName", selectedFile.name);
     startTransition(async () => {
       try {
         await uploadPdf(formData);

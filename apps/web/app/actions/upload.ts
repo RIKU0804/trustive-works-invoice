@@ -30,6 +30,8 @@ export async function uploadPdf(formData: FormData) {
   if (file.size > MAX_FILE_SIZE) {
     throw new Error("ファイルサイズは50MBまでです");
   }
+  // 日本語ファイル名のmojibake回避: クライアントから別フィールドで明示的にUTF-8文字列を受ける
+  const originalFileName = (formData.get("originalFileName") as string) || file.name;
 
   const { data: membership } = await supabase
     .from("memberships")
@@ -58,7 +60,7 @@ export async function uploadPdf(formData: FormData) {
     .from("payment_notices")
     .insert({
       organization_id: orgId,
-      file_name: file.name,
+      file_name: originalFileName,
       storage_path: storagePath,
       report_month: new Date().toISOString().slice(0, 7) + "-01",
       parse_status: "parsing",
@@ -76,7 +78,7 @@ export async function uploadPdf(formData: FormData) {
     "payment_notice.upload",
     { type: "payment_notice", id: notice.id },
     {
-      file_name: file.name,
+      file_name: originalFileName,
       storage_path: storagePath,
       report_month: notice.report_month,
     }
