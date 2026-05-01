@@ -33,6 +33,12 @@ export async function uploadPdf(formData: FormData) {
   // 日本語ファイル名のmojibake回避: クライアントから別フィールドで明示的にUTF-8文字列を受ける
   const originalFileName = (formData.get("originalFileName") as string) || file.name;
 
+  // 対象月の手動指定（PDFの解析結果より優先）
+  const overrideReportMonth = (formData.get("overrideReportMonth") as string) || null;
+  if (overrideReportMonth && !/^\d{4}-\d{2}-\d{2}$/.test(overrideReportMonth)) {
+    throw new Error("対象月の指定が不正です");
+  }
+
   const { data: membership } = await supabase
     .from("memberships")
     .select("organization_id")
@@ -62,7 +68,7 @@ export async function uploadPdf(formData: FormData) {
       organization_id: orgId,
       file_name: originalFileName,
       storage_path: storagePath,
-      report_month: new Date().toISOString().slice(0, 7) + "-01",
+      report_month: overrideReportMonth ?? new Date().toISOString().slice(0, 7) + "-01",
       parse_status: "parsing",
       uploaded_by: user.id,
     })
@@ -178,9 +184,12 @@ export async function uploadPdf(formData: FormData) {
         payment_date: isoPaymentDate,
         transfer_amount: parsed.transfer_amount,
         offset_incl_tax: parsed.offset_amount,
-        report_month: isoPaymentDate
-          ? isoPaymentDate.slice(0, 7) + "-01"
-          : notice.report_month,
+        // 手動指定があればそれを優先、無ければ PDF 解析結果、それも無ければ初期値を維持
+        report_month:
+          overrideReportMonth ??
+          (isoPaymentDate
+            ? isoPaymentDate.slice(0, 7) + "-01"
+            : notice.report_month),
       })
       .eq("id", notice.id);
     if (updateError) throw new Error(`通知更新エラー: ${updateError.message}`);

@@ -18,12 +18,19 @@ function formatElapsed(seconds: number): string {
   return `${mm}:${ss}`;
 }
 
+function currentMonthString(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
 export default function UploadPage() {
   const [isDragging, setIsDragging] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [autoDetectMonth, setAutoDetectMonth] = useState(true);
+  const [reportMonth, setReportMonth] = useState<string>(currentMonthString());
   const inputRef = useRef<HTMLInputElement>(null);
 
   // 経過時間カウンタ：処理中のみ走らせる
@@ -60,11 +67,19 @@ export default function UploadPage() {
 
   function handleSubmit() {
     if (!selectedFile) return;
+    if (!autoDetectMonth && !/^\d{4}-\d{2}$/.test(reportMonth)) {
+      setError("対象月を YYYY-MM 形式で入力してください");
+      return;
+    }
     setError(null);
     const formData = new FormData();
     formData.append("file", selectedFile);
     // ファイル名は別フィールドで明示的にUTF-8文字列として送る（multipart filename のmojibake回避）
     formData.append("originalFileName", selectedFile.name);
+    if (!autoDetectMonth) {
+      // ユーザーが手動指定した対象月（PDFの解析結果より優先）
+      formData.append("overrideReportMonth", `${reportMonth}-01`);
+    }
     startTransition(async () => {
       try {
         await uploadPdf(formData);
@@ -116,6 +131,48 @@ export default function UploadPage() {
             </>
           )}
         </div>
+      </div>
+
+      {/* 対象月設定 */}
+      <div className="rounded-lg border bg-white p-4 space-y-3">
+        <div className="text-sm font-medium">対象月</div>
+        <label className="flex items-start gap-2 text-sm cursor-pointer">
+          <input
+            type="radio"
+            name="month-mode"
+            checked={autoDetectMonth}
+            onChange={() => setAutoDetectMonth(true)}
+            className="mt-0.5"
+          />
+          <div>
+            <div>PDFから自動取得</div>
+            <div className="text-xs text-muted-foreground mt-0.5">
+              支払通知書の支払日から月を判定します（推奨）
+            </div>
+          </div>
+        </label>
+        <label className="flex items-start gap-2 text-sm cursor-pointer">
+          <input
+            type="radio"
+            name="month-mode"
+            checked={!autoDetectMonth}
+            onChange={() => setAutoDetectMonth(false)}
+            className="mt-0.5"
+          />
+          <div className="flex-1">
+            <div>手動で指定</div>
+            <div className="text-xs text-muted-foreground mt-0.5 mb-2">
+              PDF の日付がない／間違っている場合に使用
+            </div>
+            <input
+              type="month"
+              value={reportMonth}
+              onChange={(e) => setReportMonth(e.target.value)}
+              disabled={autoDetectMonth}
+              className="rounded border px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+            />
+          </div>
+        </label>
       </div>
 
       {error && (
