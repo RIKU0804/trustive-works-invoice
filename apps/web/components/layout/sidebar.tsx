@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  AlertTriangle,
   BarChart3,
   Building2,
   FileSpreadsheet,
@@ -47,7 +48,10 @@ export function Sidebar({ isAdmin = false, unassignedCount = 0 }: Props) {
 
       {unassignedCount > 0 && (
         <div className="mx-3 my-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs">
-          <div className="text-amber-900 font-medium">⚠️ 未割当</div>
+          <div className="text-amber-900 font-medium flex items-center gap-1.5">
+            <AlertTriangle className="w-3.5 h-3.5" aria-hidden="true" />
+            未割当
+          </div>
           <div className="text-amber-700 mt-0.5">
             <span className="text-base font-bold">{unassignedCount}</span> 邸
           </div>

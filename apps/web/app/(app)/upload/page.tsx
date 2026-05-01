@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
-import { Loader2 } from "lucide-react";
+import { FileText, Loader2 } from "lucide-react";
 import { uploadPdf } from "@/app/actions/upload";
 
 const PHASES: ReadonlyArray<{ label: string; minSeconds: number }> = [
@@ -98,7 +98,10 @@ export default function UploadPage() {
           onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
         />
         <div className="space-y-2">
-          <div className="text-4xl">📄</div>
+          <FileText
+            className="w-12 h-12 mx-auto text-muted-foreground"
+            aria-hidden="true"
+          />
           {selectedFile ? (
             <>
               <p className="font-medium text-foreground">{selectedFile.name}</p>

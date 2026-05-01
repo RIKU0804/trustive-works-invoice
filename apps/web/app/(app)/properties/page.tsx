@@ -1,4 +1,7 @@
+import Link from "next/link";
+import { Inbox, Upload } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
+import { fmtJpy, fmtPercent } from "@/lib/format";
 import MonthSelect from "./MonthSelect";
 
 type Props = {
@@ -44,12 +47,6 @@ export default async function PropertiesPage({ searchParams }: Props) {
         .order("created_at", { ascending: true })
     : { data: [] };
 
-  const fmt = (n: number | null) =>
-    n != null ? `¥${n.toLocaleString()}` : "—";
-
-  const fmtRate = (n: number | null) =>
-    n != null ? `${(n * 100).toFixed(1)}%` : "—";
-
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -58,12 +55,46 @@ export default async function PropertiesPage({ searchParams }: Props) {
       </div>
 
       {!properties || properties.length === 0 ? (
-        <div className="rounded-lg border border-dashed p-12 text-center">
-          <p className="text-muted-foreground text-sm">
-            {selectedMonth
-              ? `${selectedMonth} の邸データがありません`
-              : "データがありません"}
-          </p>
+        <div className="rounded-lg border border-dashed bg-white p-12">
+          <div className="max-w-md mx-auto text-center space-y-4">
+            <Inbox
+              className="w-12 h-12 mx-auto text-muted-foreground"
+              aria-hidden="true"
+            />
+            <div>
+              <h2 className="text-base font-semibold">
+                {selectedMonth
+                  ? `${selectedMonth} の邸データがありません`
+                  : "データがありません"}
+              </h2>
+              <p className="text-sm text-muted-foreground mt-1">
+                支払通知書のPDFをアップロードすると、ここに邸別の集計が表示されます。
+              </p>
+            </div>
+
+            <ol className="text-left text-sm text-muted-foreground space-y-2 mx-auto max-w-xs">
+              <li className="flex gap-2">
+                <span className="font-semibold text-foreground">1.</span>
+                <span>支払通知書のPDFを準備</span>
+              </li>
+              <li className="flex gap-2">
+                <span className="font-semibold text-foreground">2.</span>
+                <span>アップロード画面でPDFを送信</span>
+              </li>
+              <li className="flex gap-2">
+                <span className="font-semibold text-foreground">3.</span>
+                <span>邸別の粗利・担当を確認</span>
+              </li>
+            </ol>
+
+            <Link
+              href="/upload"
+              className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+            >
+              <Upload className="w-4 h-4" aria-hidden="true" />
+              PDFをアップロードする
+            </Link>
+          </div>
         </div>
       ) : (
         <div className="rounded-lg border overflow-x-auto">
@@ -94,22 +125,22 @@ export default async function PropertiesPage({ searchParams }: Props) {
                       {staff?.name ?? "—"}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums">
-                      {fmt(p.amount_sales)}
+                      {fmtJpy(p.amount_sales)}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums">
-                      {fmt(p.amount_shaho)}
+                      {fmtJpy(p.amount_shaho)}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums">
-                      {fmt(p.amount_seisanka)}
+                      {fmtJpy(p.amount_seisanka)}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums">
-                      {fmt(p.amount_material)}
+                      {fmtJpy(p.amount_material)}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums">
-                      {fmt(p.amount_gross_profit)}
+                      {fmtJpy(p.amount_gross_profit)}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums">
-                      {fmtRate(p.gross_profit_rate)}
+                      {fmtPercent(p.gross_profit_rate)}
                     </td>
                   </tr>
                 );

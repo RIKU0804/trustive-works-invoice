@@ -3,6 +3,7 @@
 import { useOptimistic, useTransition } from "react";
 import { toast } from "sonner";
 import { assignStaff } from "@/app/actions/staff";
+import { fmtJpy } from "@/lib/format";
 
 type Property = {
   id: string;
@@ -17,8 +18,6 @@ type Property = {
 };
 
 type Staff = { id: string; name: string };
-
-const fmt = (n: number | null) => n != null ? `¥${n.toLocaleString()}` : "—";
 
 export function AssignTable({
   properties,
@@ -95,8 +94,8 @@ export function AssignTable({
           {optimistic.map((p) => (
             <tr key={p.id} className="hover:bg-muted/30">
               <td className="px-3 py-2">{p.propertyName}</td>
-              <td className="px-3 py-2 text-right">{fmt(p.amountSales)}</td>
-              <td className="px-3 py-2 text-right font-medium">{fmt(p.amountGrossProfit)}</td>
+              <td className="px-3 py-2 text-right">{fmtJpy(p.amountSales)}</td>
+              <td className="px-3 py-2 text-right font-medium">{fmtJpy(p.amountGrossProfit)}</td>
               <td className="px-3 py-2">
                 <select
                   value={p.staffMemberId ?? ""}

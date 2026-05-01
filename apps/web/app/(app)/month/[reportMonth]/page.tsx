@@ -2,13 +2,9 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { MonthGrid, type PropertyRow, type StaffOption } from "./MonthGrid";
+import { fmtJpy } from "@/lib/format";
 
 type Params = { reportMonth: string };
-
-function fmtJpy(n: number | null | undefined): string {
-  if (n == null) return "—";
-  return Math.round(Number(n)).toLocaleString();
-}
 
 export default async function MonthDetailPage({ params }: { params: Params }) {
   const supabase = createClient();
@@ -180,7 +176,7 @@ export default async function MonthDetailPage({ params }: { params: Params }) {
                 <tr key={s.name} className="border-b last:border-0">
                   <td className="px-3 py-2 font-medium">{s.name}</td>
                   <td className="px-3 py-2 text-right tabular-nums">
-                    ¥{fmtJpy(s.grossProfit)}
+                    {fmtJpy(s.grossProfit)}
                   </td>
                 </tr>
               ))}
@@ -221,19 +217,19 @@ export default async function MonthDetailPage({ params }: { params: Params }) {
               <tr className="border-b">
                 <td className="px-3 py-2">振込金額</td>
                 <td className="px-3 py-2 text-right tabular-nums">
-                  ¥{fmtJpy(transferTotal)}
+                  {fmtJpy(transferTotal)}
                 </td>
               </tr>
               <tr className="border-b">
                 <td className="px-3 py-2">相殺（税込）</td>
                 <td className="px-3 py-2 text-right tabular-nums">
-                  ¥{fmtJpy(offsetTotal)}
+                  {fmtJpy(offsetTotal)}
                 </td>
               </tr>
               <tr className="bg-purple-50 font-semibold">
                 <td className="px-3 py-2">差引</td>
                 <td className="px-3 py-2 text-right tabular-nums">
-                  ¥{fmtJpy(transferTotal + offsetTotal)}
+                  {fmtJpy(transferTotal + offsetTotal)}
                 </td>
               </tr>
             </tbody>

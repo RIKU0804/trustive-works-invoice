@@ -25,14 +25,15 @@ test.describe("ダッシュボード", () => {
   test("行のアクションリンクから詳細ページに遷移できる", async ({ page }) => {
     await page.goto("/dashboard");
     const firstRow = page.locator("table tbody tr").first();
-    const actionLink = firstRow.getByRole("link", { name: /割当|詳細/ });
+    // first() を付けて、月詳細/割当/詳細 のどれか一つを取得
+    const actionLink = firstRow.getByRole("link", { name: /割当|詳細/ }).first();
     await expect(actionLink).toBeVisible();
 
     const href = await actionLink.getAttribute("href");
-    expect(href).toMatch(/^\/(assign|preview)\//);
+    expect(href).toMatch(/^\/(assign|preview|month)\//);
 
     await actionLink.click();
-    await page.waitForURL(/\/(assign|preview)\//);
-    expect(page.url()).toMatch(/\/(assign|preview)\//);
+    await page.waitForURL(/\/(assign|preview|month)\//);
+    expect(page.url()).toMatch(/\/(assign|preview|month)\//);
   });
 });

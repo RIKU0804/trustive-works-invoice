@@ -1,6 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
 import Link from "next/link";
+import { Inbox, Upload } from "lucide-react";
 import { SearchButton } from "./SearchButton";
+import { fmtJpy } from "@/lib/format";
 
 type SupabaseAny = ReturnType<typeof createClient>;
 
@@ -145,9 +147,6 @@ export default async function DashboardPage() {
     failed: "bg-red-100 text-red-800",
   };
 
-  const fmt = (n: number | null) =>
-    n != null ? `¥${n.toLocaleString()}` : "—";
-
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -172,7 +171,7 @@ export default async function DashboardPage() {
             >
               <div className="text-xs text-muted-foreground">{c.label}</div>
               <div className="mt-1 text-xl font-bold tabular-nums">
-                ¥{c.value.toLocaleString()}
+                {fmtJpy(c.value)}
               </div>
               <div className="text-[11px] mt-1">
                 {c.delta != null && c.deltaPct != null ? (
@@ -193,7 +192,7 @@ export default async function DashboardPage() {
                 )}
               </div>
               <div className="text-[11px] text-muted-foreground mt-1">
-                粗利: ¥{c.grossProfit.toLocaleString()} ({c.grossProfitRate.toFixed(1)}%) ·{" "}
+                粗利: {fmtJpy(c.grossProfit)} ({c.grossProfitRate.toFixed(1)}%) ·{" "}
                 {c.propertyCount}邸
               </div>
             </div>
@@ -202,14 +201,44 @@ export default async function DashboardPage() {
       )}
 
       {!notices || notices.length === 0 ? (
-        <div className="rounded-lg border border-dashed p-12 text-center">
-          <p className="text-muted-foreground text-sm">支払通知書がまだありません</p>
-          <Link
-            href="/upload"
-            className="mt-3 inline-block text-sm text-primary underline underline-offset-4"
-          >
-            PDFをアップロードする
-          </Link>
+        <div className="rounded-lg border border-dashed bg-white p-12">
+          <div className="max-w-md mx-auto text-center space-y-4">
+            <Inbox
+              className="w-12 h-12 mx-auto text-muted-foreground"
+              aria-hidden="true"
+            />
+            <div>
+              <h2 className="text-base font-semibold">
+                支払通知書がまだありません
+              </h2>
+              <p className="text-sm text-muted-foreground mt-1">
+                PDFをアップロードすると自動で物件・粗利を集計します。
+              </p>
+            </div>
+
+            <ol className="text-left text-sm text-muted-foreground space-y-2 mx-auto max-w-xs">
+              <li className="flex gap-2">
+                <span className="font-semibold text-foreground">1.</span>
+                <span>支払通知書のPDFを準備</span>
+              </li>
+              <li className="flex gap-2">
+                <span className="font-semibold text-foreground">2.</span>
+                <span>右下のボタンからアップロード</span>
+              </li>
+              <li className="flex gap-2">
+                <span className="font-semibold text-foreground">3.</span>
+                <span>自動で物件・粗利を集計</span>
+              </li>
+            </ol>
+
+            <Link
+              href="/upload"
+              className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+            >
+              <Upload className="w-4 h-4" aria-hidden="true" />
+              PDFをアップロードする
+            </Link>
+          </div>
         </div>
       ) : (
         <div className="rounded-lg border overflow-x-auto">
@@ -229,7 +258,7 @@ export default async function DashboardPage() {
                 <tr key={n.id} className="hover:bg-muted/30">
                   <td className="px-4 py-3 font-medium">{n.file_name}</td>
                   <td className="px-4 py-3 text-muted-foreground">{n.report_month}</td>
-                  <td className="px-4 py-3 text-right">{fmt(n.transfer_amount)}</td>
+                  <td className="px-4 py-3 text-right">{fmtJpy(n.transfer_amount)}</td>
                   <td className="px-4 py-3">
                     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${statusColor[n.parse_status]}`}>
                       {statusLabel[n.parse_status]}

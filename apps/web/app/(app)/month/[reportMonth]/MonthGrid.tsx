@@ -1,8 +1,17 @@
 "use client";
 
-import { useEffect, useMemo, useOptimistic, useRef, useState, useTransition } from "react";
+import {
+  useEffect,
+  useMemo,
+  useOptimistic,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import { toast } from "sonner";
+import { HelpCircle, Search } from "lucide-react";
 import { assignStaff } from "@/app/actions/staff";
+import { fmtNumber, fmtPercent } from "@/lib/format";
 
 export interface PropertyRow {
   id: string;
@@ -47,14 +56,6 @@ const ZOOM_LEVELS = [0.5, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75];
 const DEFAULT_ZOOM = 1.0;
 const ZOOM_STORAGE_KEY = "invoice-saas2:month-zoom";
 
-function fmtJpy(n: number): string {
-  return Math.round(n).toLocaleString();
-}
-
-function fmtPercent(rate: number): string {
-  return `${(rate * 100).toFixed(1)}%`;
-}
-
 function rateColor(rate: number): string {
   if (rate >= 0.4) return "text-green-700 font-semibold";
   if (rate >= 0.3) return "text-blue-700";
@@ -75,6 +76,7 @@ export function MonthGrid({
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortAsc, setSortAsc] = useState(true);
   const [activeCell, setActiveCell] = useState<{ row: number; col: number } | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [, startTransition] = useTransition();
   const [optimisticRows, updateRows] = useOptimistic(
@@ -145,6 +147,16 @@ export function MonthGrid({
     return () => el.removeEventListener("wheel", handler);
   }, []);
 
+  // ヘルプポップオーバーを Esc / 外クリックで閉じる
+  useEffect(() => {
+    if (!showHelp) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowHelp(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [showHelp]);
+
   const filteredRows = useMemo(() => {
     if (!searchQuery.trim()) return optimisticRows;
     const q = searchQuery.toLowerCase();
@@ -191,21 +203,25 @@ export function MonthGrid({
     setActiveCell({ row: nr, col: nc });
   }
 
-  const sortIndicator = (key: SortKey) =>
-    sortKey === key ? (sortAsc ? " ↑" : " ↓") : "";
-
   return (
     <div className="space-y-2">
       {/* ツールバー */}
       <div className="flex flex-wrap items-center justify-between bg-gray-100 border rounded-md px-3 py-2 text-xs gap-2">
         <div className="flex items-center gap-2 flex-wrap">
-          <input
-            type="search"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="🔍 物件名・工事・担当者で検索..."
-            className="rounded border px-2 py-1 bg-white w-64"
-          />
+          <div className="relative">
+            <Search
+              className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none"
+              aria-hidden="true"
+            />
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="物件名・工事・担当者で検索..."
+              aria-label="物件名・工事・担当者で検索"
+              className="rounded border pl-7 pr-2 py-1 bg-white w-64"
+            />
+          </div>
           <span className="text-muted-foreground">
             {sortedRows.length === rows.length
               ? `${rows.length} 邸`
@@ -227,6 +243,7 @@ export function MonthGrid({
           <select
             value={zoom}
             onChange={(e) => setZoom(parseFloat(e.target.value))}
+            aria-label="ズーム倍率"
             className="rounded border px-2 py-1 bg-white"
           >
             {ZOOM_LEVELS.map((z) => (
@@ -253,6 +270,55 @@ export function MonthGrid({
           >
             100%
           </button>
+
+          {/* ヘルプ（キーボードショートカット） */}
+          <div className="relative ml-1">
+            <button
+              type="button"
+              onClick={() => setShowHelp((v) => !v)}
+              onBlur={() => setTimeout(() => setShowHelp(false), 150)}
+              className="flex items-center justify-center rounded border w-7 h-7 hover:bg-white"
+              aria-label="キーボードショートカット"
+              aria-expanded={showHelp}
+              aria-haspopup="dialog"
+              title="キーボードショートカット"
+            >
+              <HelpCircle className="w-4 h-4 text-muted-foreground" aria-hidden="true" />
+            </button>
+            {showHelp && (
+              <div
+                role="dialog"
+                aria-label="キーボードショートカット"
+                className="absolute right-0 top-full mt-2 w-72 rounded-md border bg-white shadow-lg p-3 z-50 text-xs"
+              >
+                <div className="font-semibold mb-2">キーボードショートカット</div>
+                <dl className="space-y-1.5">
+                  <div className="flex justify-between gap-2">
+                    <dt>
+                      <kbd className="px-1.5 py-0.5 rounded border bg-gray-50 text-[10px]">Ctrl</kbd>
+                      {" + "}
+                      <span className="text-muted-foreground">マウスホイール</span>
+                    </dt>
+                    <dd className="text-muted-foreground">ズーム</dd>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <dt>
+                      <kbd className="px-1.5 py-0.5 rounded border bg-gray-50 text-[10px]">↑↓←→</kbd>
+                    </dt>
+                    <dd className="text-muted-foreground">セル移動</dd>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <dt>
+                      <kbd className="px-1.5 py-0.5 rounded border bg-gray-50 text-[10px]">Ctrl</kbd>
+                      {" + "}
+                      <kbd className="px-1.5 py-0.5 rounded border bg-gray-50 text-[10px]">K</kbd>
+                    </dt>
+                    <dd className="text-muted-foreground">コマンドパレット</dd>
+                  </div>
+                </dl>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -274,8 +340,10 @@ export function MonthGrid({
           <table className="text-xs whitespace-nowrap border-collapse" style={{ minWidth: 1200 }}>
             <thead className="sticky top-0 z-20">
               <HeaderCell
+                sortKey="propertyName"
+                currentSort={sortKey}
+                sortAsc={sortAsc}
                 onClick={() => toggleSort("propertyName")}
-                indicator={sortIndicator("propertyName")}
                 sticky
                 left={0}
                 width={40}
@@ -284,8 +352,10 @@ export function MonthGrid({
                 No
               </HeaderCell>
               <HeaderCell
+                sortKey="propertyName"
+                currentSort={sortKey}
+                sortAsc={sortAsc}
                 onClick={() => toggleSort("propertyName")}
-                indicator={sortIndicator("propertyName")}
                 sticky
                 left={40}
                 width={130}
@@ -293,63 +363,79 @@ export function MonthGrid({
                 顧客名
               </HeaderCell>
               <HeaderCell
+                sortKey="workSummary"
+                currentSort={sortKey}
+                sortAsc={sortAsc}
                 onClick={() => toggleSort("workSummary")}
-                indicator={sortIndicator("workSummary")}
                 width={140}
               >
                 工事名称
               </HeaderCell>
               <HeaderCell
+                sortKey="amountSales"
+                currentSort={sortKey}
+                sortAsc={sortAsc}
                 onClick={() => toggleSort("amountSales")}
-                indicator={sortIndicator("amountSales")}
                 align="right"
                 width={120}
               >
                 ①税抜
               </HeaderCell>
               <HeaderCell
+                sortKey="amountShaho"
+                currentSort={sortKey}
+                sortAsc={sortAsc}
                 onClick={() => toggleSort("amountShaho")}
-                indicator={sortIndicator("amountShaho")}
                 align="right"
                 width={120}
               >
                 ②社保
               </HeaderCell>
               <HeaderCell
+                sortKey="amountSeisanka"
+                currentSort={sortKey}
+                sortAsc={sortAsc}
                 onClick={() => toggleSort("amountSeisanka")}
-                indicator={sortIndicator("amountSeisanka")}
                 align="right"
                 width={120}
               >
                 ③生産課
               </HeaderCell>
               <HeaderCell
+                sortKey="amountMaterial"
+                currentSort={sortKey}
+                sortAsc={sortAsc}
                 onClick={() => toggleSort("amountMaterial")}
-                indicator={sortIndicator("amountMaterial")}
                 align="right"
                 width={120}
               >
                 ④材料費
               </HeaderCell>
               <HeaderCell
+                sortKey="amountGrossProfit"
+                currentSort={sortKey}
+                sortAsc={sortAsc}
                 onClick={() => toggleSort("amountGrossProfit")}
-                indicator={sortIndicator("amountGrossProfit")}
                 align="right"
                 width={130}
               >
                 ⑦粗利
               </HeaderCell>
               <HeaderCell
+                sortKey="staffName"
+                currentSort={sortKey}
+                sortAsc={sortAsc}
                 onClick={() => toggleSort("staffName")}
-                indicator={sortIndicator("staffName")}
                 align="center"
                 width={80}
               >
                 班長
               </HeaderCell>
               <HeaderCell
+                sortKey="grossProfitRate"
+                currentSort={sortKey}
+                sortAsc={sortAsc}
                 onClick={() => toggleSort("grossProfitRate")}
-                indicator={sortIndicator("grossProfitRate")}
                 align="right"
                 width={90}
               >
@@ -374,19 +460,19 @@ export function MonthGrid({
                     <span className="text-muted-foreground">{p.workSummary ?? "—"}</span>
                   </BodyCell>
                   <BodyCell active={isActive(activeCell, idx, 3)} width={120} align="right" onClick={() => setActiveCell({ row: idx, col: 3 })}>
-                    {fmtJpy(p.amountSales)}
+                    {fmtNumber(p.amountSales)}
                   </BodyCell>
                   <BodyCell active={isActive(activeCell, idx, 4)} width={120} align="right" onClick={() => setActiveCell({ row: idx, col: 4 })}>
-                    {fmtJpy(p.amountShaho)}
+                    {fmtNumber(p.amountShaho)}
                   </BodyCell>
                   <BodyCell active={isActive(activeCell, idx, 5)} width={120} align="right" onClick={() => setActiveCell({ row: idx, col: 5 })}>
-                    {fmtJpy(p.amountSeisanka)}
+                    {fmtNumber(p.amountSeisanka)}
                   </BodyCell>
                   <BodyCell active={isActive(activeCell, idx, 6)} width={120} align="right" onClick={() => setActiveCell({ row: idx, col: 6 })}>
-                    {fmtJpy(p.amountMaterial)}
+                    {fmtNumber(p.amountMaterial)}
                   </BodyCell>
                   <BodyCell active={isActive(activeCell, idx, 7)} width={130} align="right" onClick={() => setActiveCell({ row: idx, col: 7 })}>
-                    <span className="font-semibold">{fmtJpy(p.amountGrossProfit)}</span>
+                    <span className="font-semibold">{fmtNumber(p.amountGrossProfit)}</span>
                   </BodyCell>
                   <BodyCell
                     active={isActive(activeCell, idx, 8)}
@@ -398,6 +484,7 @@ export function MonthGrid({
                       value={p.staffMemberId ?? ""}
                       onChange={(e) => handleStaffChange(p.id, e.target.value)}
                       onClick={(e) => e.stopPropagation()}
+                      aria-label={`${p.propertyName} の班長`}
                       className="w-full bg-transparent border-0 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400 rounded"
                     >
                       <option value="">未</option>
@@ -418,11 +505,11 @@ export function MonthGrid({
                 <td className="px-2 py-2 text-center bg-amber-100" style={{ minWidth: 40, width: 40 }}></td>
                 <td className="px-2 py-2 bg-amber-100" style={{ minWidth: 130, width: 130 }}>売上合計</td>
                 <td className="px-2 py-2 bg-amber-100" style={{ minWidth: 140, width: 140 }}></td>
-                <td className="px-2 py-2 text-right">{fmtJpy(totals.sales)}</td>
-                <td className="px-2 py-2 text-right">{fmtJpy(totals.shaho)}</td>
-                <td className="px-2 py-2 text-right">{fmtJpy(totals.seisanka)}</td>
-                <td className="px-2 py-2 text-right">{fmtJpy(totals.material)}</td>
-                <td className="px-2 py-2 text-right">{fmtJpy(totals.grossProfit)}</td>
+                <td className="px-2 py-2 text-right">{fmtNumber(totals.sales)}</td>
+                <td className="px-2 py-2 text-right">{fmtNumber(totals.shaho)}</td>
+                <td className="px-2 py-2 text-right">{fmtNumber(totals.seisanka)}</td>
+                <td className="px-2 py-2 text-right">{fmtNumber(totals.material)}</td>
+                <td className="px-2 py-2 text-right">{fmtNumber(totals.grossProfit)}</td>
                 <td className="px-2 py-2"></td>
                 <td className={`px-2 py-2 text-right ${rateColor(totals.grossProfitRate)}`}>
                   {fmtPercent(totals.grossProfitRate)}
@@ -432,10 +519,6 @@ export function MonthGrid({
           </table>
         </div>
       </div>
-
-      <div className="text-[11px] text-muted-foreground">
-        ショートカット: Ctrl + マウスホイール でズーム / 矢印キーでセル移動
-      </div>
     </div>
   );
 }
@@ -444,23 +527,29 @@ function isActive(active: { row: number; col: number } | null, r: number, c: num
   return active?.row === r && active?.col === c;
 }
 
-function HeaderCell({
-  children,
-  onClick,
-  indicator,
-  align = "left",
-  sticky,
-  left,
-  width,
-}: {
+interface HeaderCellProps {
   children: React.ReactNode;
   onClick?: () => void;
-  indicator?: string;
+  sortKey?: SortKey;
+  currentSort?: SortKey | null;
+  sortAsc?: boolean;
   align?: "left" | "right" | "center";
   sticky?: boolean;
   left?: number;
   width?: number;
-}) {
+}
+
+function HeaderCell({
+  children,
+  onClick,
+  sortKey,
+  currentSort,
+  sortAsc,
+  align = "left",
+  sticky,
+  left,
+  width,
+}: HeaderCellProps) {
   const alignClass =
     align === "right" ? "text-right" : align === "center" ? "text-center" : "text-left";
   const stickyStyle: React.CSSProperties = sticky
@@ -472,14 +561,30 @@ function HeaderCell({
         width,
       }
     : { minWidth: width, width };
+
+  const isActiveSort = sortKey != null && currentSort === sortKey;
+  const ariaSort: "ascending" | "descending" | "none" =
+    isActiveSort ? (sortAsc ? "ascending" : "descending") : "none";
+  const indicator = isActiveSort ? (sortAsc ? " ↑" : " ↓") : "";
+
   return (
     <th
       onClick={onClick}
+      onKeyDown={(e) => {
+        if ((e.key === "Enter" || e.key === " ") && onClick) {
+          e.preventDefault();
+          onClick();
+        }
+      }}
+      role="columnheader"
+      aria-sort={ariaSort}
+      tabIndex={onClick ? 0 : -1}
+      scope="col"
       style={stickyStyle}
-      className={`px-2 py-2 font-semibold bg-amber-50 border-b-2 border-amber-200 cursor-pointer hover:bg-amber-100 select-none ${alignClass}`}
+      className={`px-2 py-2 font-semibold bg-amber-50 border-b-2 border-amber-200 cursor-pointer hover:bg-amber-100 select-none focus:outline-none focus:ring-2 focus:ring-amber-400 ${alignClass}`}
     >
       {children}
-      <span className="text-amber-600">{indicator}</span>
+      <span className="text-amber-600" aria-hidden="true">{indicator}</span>
     </th>
   );
 }

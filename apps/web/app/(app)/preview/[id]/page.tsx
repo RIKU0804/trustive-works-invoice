@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { AlertTriangle } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { fmtJpy } from "@/lib/format";
 import { ParsingPoller } from "./ParsingPoller";
@@ -116,8 +117,16 @@ export default async function PreviewPage({ params }: { params: { id: string } }
       </div>
 
       {notice.parse_status === "failed" && (
-        <div className="rounded-md bg-destructive/10 border border-destructive/20 p-4 text-sm text-destructive">
-          解析に失敗しました。PDFの形式を確認してください。
+        <div className="rounded-md bg-destructive/10 border border-destructive/20 p-4 text-sm text-destructive space-y-3">
+          <div>
+            <div className="font-medium">解析に失敗しました</div>
+            <div className="mt-1 text-destructive/80">
+              {notice.parse_error
+                ? notice.parse_error
+                : "PDFの形式を確認し、再アップロードを試してください。"}
+            </div>
+          </div>
+          <FailedNoticeActions noticeId={notice.id} fileName={notice.file_name} />
         </div>
       )}
 
@@ -141,9 +150,12 @@ export default async function PreviewPage({ params }: { params: { id: string } }
           </div>
 
           {lowConfidenceCount > 0 && (
-            <div className="rounded-md bg-amber-50 border border-amber-200 p-3 text-sm text-amber-900">
-              <span className="font-medium">⚠ 要確認:</span>{" "}
-              信頼度が低い行が <span className="font-semibold">{lowConfidenceCount}</span> 件あります。下の明細でハイライトされた行を確認してください。
+            <div className="rounded-md bg-amber-50 border border-amber-200 p-3 text-sm text-amber-900 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0 text-amber-700" aria-hidden="true" />
+              <div>
+                <span className="font-medium">要確認:</span>{" "}
+                信頼度が低い行が <span className="font-semibold">{lowConfidenceCount}</span> 件あります。下の明細でハイライトされた行を確認してください。
+              </div>
             </div>
           )}
 
@@ -235,7 +247,14 @@ export default async function PreviewPage({ params }: { params: { id: string } }
                             title={`${METHOD_LABEL[method] ?? method}: 信頼度 ${(conf * 100).toFixed(0)}%`}
                           >
                             <td className="px-3 py-2 text-center">
-                              {isLow ? <span aria-label="要確認">⚠</span> : ""}
+                              {isLow ? (
+                                <AlertTriangle
+                                  className="w-4 h-4 inline text-amber-600"
+                                  aria-label="要確認"
+                                />
+                              ) : (
+                                ""
+                              )}
                             </td>
                             <td className="px-3 py-2">{p.property_name}</td>
                             <td className="px-3 py-2">{line.work_type}</td>
