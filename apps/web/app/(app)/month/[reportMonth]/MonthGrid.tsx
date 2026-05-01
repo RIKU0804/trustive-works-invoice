@@ -413,11 +413,11 @@ export function MonthGrid({
                   </BodyCell>
                 </tr>
               ))}
-              {/* 合計行 */}
-              <tr className="bg-amber-100 border-t-2 border-amber-300 font-semibold sticky bottom-0">
-                <td className="px-2 py-2 text-center sticky left-0 bg-amber-100" style={{ minWidth: 40 }}></td>
-                <td className="px-2 py-2 sticky bg-amber-100" style={{ left: 40, minWidth: 130, position: "sticky" }}>売上合計</td>
-                <td className="px-2 py-2"></td>
+              {/* 合計行（zoomのtransformとsticky bottomが衝突するためsticky解除） */}
+              <tr className="bg-amber-100 border-t-2 border-amber-300 font-semibold">
+                <td className="px-2 py-2 text-center bg-amber-100" style={{ minWidth: 40, width: 40 }}></td>
+                <td className="px-2 py-2 bg-amber-100" style={{ minWidth: 130, width: 130 }}>売上合計</td>
+                <td className="px-2 py-2 bg-amber-100" style={{ minWidth: 140, width: 140 }}></td>
                 <td className="px-2 py-2 text-right">{fmtJpy(totals.sales)}</td>
                 <td className="px-2 py-2 text-right">{fmtJpy(totals.shaho)}</td>
                 <td className="px-2 py-2 text-right">{fmtJpy(totals.seisanka)}</td>
