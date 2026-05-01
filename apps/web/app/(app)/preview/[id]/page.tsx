@@ -1,5 +1,8 @@
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { fmtJpy } from "@/lib/format";
+import { ParsingPoller } from "./ParsingPoller";
+import { FailedNoticeActions } from "./FailedNoticeActions";
 
 const LOW_CONFIDENCE_THRESHOLD = 0.7;
 
@@ -21,11 +24,6 @@ const METHOD_BADGE_CLASS: Record<string, string> = {
   ai: "bg-violet-100 text-violet-700 border-violet-200",
   manual: "bg-emerald-100 text-emerald-700 border-emerald-200",
 };
-
-function fmtJpy(n: number | null | undefined): string {
-  if (n == null) return "—";
-  return `¥${Number(n).toLocaleString()}`;
-}
 
 export default async function PreviewPage({ params }: { params: { id: string } }) {
   const supabase = createClient();
@@ -123,11 +121,7 @@ export default async function PreviewPage({ params }: { params: { id: string } }
         </div>
       )}
 
-      {notice.parse_status === "parsing" && (
-        <div className="rounded-md bg-blue-50 border border-blue-200 p-4 text-sm text-blue-700">
-          解析中です。ページをリロードして結果を確認してください。
-        </div>
-      )}
+      {notice.parse_status === "parsing" && <ParsingPoller />}
 
       {notice.parse_status === "completed" && (
         <>
