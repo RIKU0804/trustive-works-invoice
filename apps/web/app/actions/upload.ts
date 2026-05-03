@@ -104,6 +104,7 @@ export async function uploadPdf(formData: FormData) {
       amount_shaho: p.amount_shaho,
       amount_seisanka: p.amount_seisanka,
       amount_material: p.amount_materials,
+      amount_tatekae: p.amount_tatekae ?? 0,
     }));
 
     let propertyIdByName: Map<string, string> = new Map();

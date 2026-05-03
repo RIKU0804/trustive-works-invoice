@@ -102,6 +102,8 @@ async def parse_pdf(
         payment_date=payment_date,
         transfer_amount=totals["furikomi"],
         offset_amount=totals["sousai"],
+        pdf_koujidai_zeinuki=totals.get("pdf_koujidai_zeinuki"),
+        pdf_koujidai_zeikomi=totals.get("pdf_koujidai_zeikomi"),
         properties=properties,
         lines=lines,
         ai_classifications=ai_classifications,

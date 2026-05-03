@@ -22,7 +22,7 @@ CONFIDENCE_MEDIUM = 0.7
 CONFIDENCE_LOW_AMBIGUOUS = 0.5
 CONFIDENCE_FALLBACK = 0.3
 
-Category = Literal["sales", "shaho", "seisanka", "material"]
+Category = Literal["sales", "shaho", "seisanka", "material", "tatekae"]
 
 
 @dataclass(frozen=True)
@@ -59,6 +59,12 @@ def classify_row(row: dict) -> RuleResult:
 
     is_seisanka = any(kw in note for kw in KNOWN_NAKAUCHI_KEYWORDS)
     is_shaho = SHAHO_KEYWORD in work_type
+    is_tatekae = "立替金" in work_type
+
+    # 立替金は非課税(税抜=税込)。売上に含めるが分類は tatekae で別管理する
+    # (v1.2.4 invoice-tool 仕様)
+    if is_tatekae:
+        return RuleResult(category="tatekae", confidence=CONFIDENCE_HIGH)
 
     # プラス金額は売上で確定（強いルール）
     if amount >= 0:
@@ -100,6 +106,7 @@ def aggregate_classified_lines(lines: list[dict]) -> list[AggregatedProperty]:
         "E": 0,
         "F": 0,
         "G_items": [],
+        "tatekae_items": [],
     })
 
     for row in lines:
@@ -129,6 +136,13 @@ def aggregate_classified_lines(lines: list[dict]) -> list[AggregatedProperty]:
             agg["E"] += abs_amount
         elif category == "seisanka":
             agg["F"] += abs_amount
+        elif category == "tatekae":
+            # 立替金は売上(D)に含めつつ別フィールドで追跡 (v1.2.4 invoice-tool 仕様)
+            agg["tatekae_items"].append(amount)
+            if amount >= 0:
+                agg["D_items"].append(amount)
+            else:
+                agg["G_items"].append(abs_amount)
         else:  # material
             agg["G_items"].append(abs_amount)
 
@@ -160,6 +174,7 @@ def _finalize_aggregate(by_tei: dict) -> list[AggregatedProperty]:
         amount_shaho = agg["E"]
         amount_seisanka = agg["F"]
         amount_materials = sum(agg["G_items"])
+        amount_tatekae = sum(agg["tatekae_items"])
         amount_other = 0
         gross_profit = amount_sales - amount_shaho - amount_seisanka - amount_materials - amount_other
 
@@ -177,6 +192,7 @@ def _finalize_aggregate(by_tei: dict) -> list[AggregatedProperty]:
             amount_shaho=amount_shaho,
             amount_seisanka=amount_seisanka,
             amount_materials=amount_materials,
+            amount_tatekae=amount_tatekae,
             amount_other=amount_other,
             gross_profit=gross_profit,
         ))

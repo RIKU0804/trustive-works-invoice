@@ -333,6 +333,7 @@ export type Database = {
           amount_sales: number
           amount_seisanka: number
           amount_shaho: number
+          amount_tatekae: number
           contract_no: string | null
           created_at: string
           gross_profit_rate: number | null
@@ -351,6 +352,7 @@ export type Database = {
           amount_sales?: number
           amount_seisanka?: number
           amount_shaho?: number
+          amount_tatekae?: number
           contract_no?: string | null
           created_at?: string
           gross_profit_rate?: number | null
@@ -369,6 +371,7 @@ export type Database = {
           amount_sales?: number
           amount_seisanka?: number
           amount_shaho?: number
+          amount_tatekae?: number
           contract_no?: string | null
           created_at?: string
           gross_profit_rate?: number | null

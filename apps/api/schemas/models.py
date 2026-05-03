@@ -16,7 +16,7 @@ class ParsedRow(BaseModel):
 
 
 # 1行ごとの分類結果（プレビューでハイライト用にフロントへ返す）
-ClassificationCategory = Literal["sales", "shaho", "seisanka", "material"]
+ClassificationCategory = Literal["sales", "shaho", "seisanka", "material", "tatekae"]
 ClassificationMethod = Literal["rule", "ai", "manual"]
 
 
@@ -54,6 +54,9 @@ class AggregatedProperty(BaseModel):
     amount_shaho: int
     amount_seisanka: int
     amount_materials: int
+    # 立替金 (非課税・税抜=税込)。amount_sales には含まれているが、
+    # 振込金額照合の税抜逆算で 1.1 で割らない補正に使うために別途追跡する。
+    amount_tatekae: int = 0
     amount_other: int
     gross_profit: int
 
@@ -62,6 +65,9 @@ class ParseResponse(BaseModel):
     payment_date: Optional[str]
     transfer_amount: Optional[int]
     offset_amount: Optional[int]
+    # PDF 記載の工事代計（税抜・税込）。振込金額照合のクロスチェック用。
+    pdf_koujidai_zeinuki: Optional[int] = None
+    pdf_koujidai_zeikomi: Optional[int] = None
     properties: list[AggregatedProperty]
     lines: list[ClassifiedLine] = Field(default_factory=list)
     ai_classifications: list[AIClassification] = Field(default_factory=list)

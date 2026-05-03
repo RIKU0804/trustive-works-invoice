@@ -110,3 +110,40 @@ def test_multiple_properties():
     assert len(result) == 2
     names = {r.property_name for r in result}
     assert names == {"A邸", "B邸"}
+
+
+# ----- v1.2.4 立替金特別処理 -----
+
+def test_tatekae_tracked_separately():
+    """立替金行は amount_tatekae で別追跡される"""
+    rows = [_row("共通原価邸", "立替金", "生産課エスポラス育成費", 110000)]
+    result = classify_and_aggregate(rows)
+    assert result[0].amount_tatekae == 110000
+    # 売上(D)にも含まれる(後段の振込金額照合補正のため)
+    assert result[0].amount_sales == 110000
+
+
+def test_tatekae_with_normal_sales():
+    """通常売上と立替金の混在: 別々に集計される"""
+    rows = [
+        _row("共通原価邸", "防水", "", 50000),
+        _row("共通原価邸", "立替金", "生産課育成費", 110000),
+    ]
+    result = classify_and_aggregate(rows)
+    assert result[0].amount_sales == 160000  # 50000 + 110000
+    assert result[0].amount_tatekae == 110000  # 立替金のみ
+
+
+def test_tatekae_default_zero():
+    """立替金がない邸の amount_tatekae は 0"""
+    rows = [_row("普通邸", "防水", "", 100000)]
+    result = classify_and_aggregate(rows)
+    assert result[0].amount_tatekae == 0
+
+
+def test_tatekae_negative_goes_to_materials():
+    """マイナスの立替金(レアケース)は materials へ"""
+    rows = [_row("共通原価邸", "立替金", "", -10000)]
+    result = classify_and_aggregate(rows)
+    assert result[0].amount_tatekae == -10000
+    assert result[0].amount_materials == 10000
