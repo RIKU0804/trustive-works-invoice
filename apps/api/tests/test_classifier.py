@@ -10,14 +10,14 @@ import pytest
 from services.classifier import classify_and_aggregate
 
 
-def _row(tei: str, koushu: str, bikou: str, zeinuki: int) -> dict:
+def _row(tei: str, koushu: str, bikou: str, zeinuki: int, shohizei: int = 0) -> dict:
     return {
         "邸名": tei,
         "契約NO": "TEST-001",
         "工種": koushu,
         "税抜金額": zeinuki,
-        "消費税": 0,
-        "税込金額": 0,
+        "消費税": shohizei,
+        "税込金額": zeinuki + shohizei,
         "備考": bikou,
         "事業所": "TEST",
     }
@@ -147,3 +147,79 @@ def test_tatekae_negative_goes_to_materials():
     result = classify_and_aggregate(rows)
     assert result[0].amount_tatekae == -10000
     assert result[0].amount_materials == 10000
+
+
+# ----- 進化版要件 260510: カテゴリ別消費税の分離管理 -----
+
+def test_sales_consumption_tax_aggregated():
+    """売上行の消費税は amount_sales_tax に集計される"""
+    rows = [_row("A邸", "防水(全)", "", 100000, 10000)]
+    result = classify_and_aggregate(rows)
+    assert result[0].amount_sales == 100000
+    assert result[0].amount_sales_tax == 10000
+
+
+def test_shaho_consumption_tax_aggregated():
+    """社保行(マイナス)の消費税絶対値が amount_shaho_tax に集計される"""
+    rows = [_row("A邸", "防水(社保)", "生産課中口分", -50000, -5000)]
+    result = classify_and_aggregate(rows)
+    assert result[0].amount_shaho == 50000
+    assert result[0].amount_shaho_tax == 5000
+
+
+def test_seisanka_consumption_tax_aggregated():
+    """生産課行の消費税絶対値が amount_seisanka_tax に集計される"""
+    rows = [_row("A邸", "防水(全)", "生産課中口分", -30000, -3000)]
+    result = classify_and_aggregate(rows)
+    assert result[0].amount_seisanka == 30000
+    assert result[0].amount_seisanka_tax == 3000
+
+
+def test_material_consumption_tax_aggregated():
+    """材料費行の消費税絶対値が amount_materials_tax に集計される"""
+    rows = [_row("A邸", "防水シート(相殺)", "", -20000, -2000)]
+    result = classify_and_aggregate(rows)
+    assert result[0].amount_materials == 20000
+    assert result[0].amount_materials_tax == 2000
+
+
+def test_tatekae_has_zero_tax():
+    """立替金は非課税のため消費税は 0 (D には含めるが D_tax には加えない)"""
+    rows = [_row("共通原価邸", "立替金", "", 110000, 0)]
+    result = classify_and_aggregate(rows)
+    assert result[0].amount_sales == 110000
+    assert result[0].amount_sales_tax == 0
+    assert result[0].amount_tatekae == 110000
+
+
+def test_consumption_tax_default_zero_when_missing():
+    """消費税フィールドが None の行も 0 として扱う (後方互換)"""
+    row = {
+        "邸名": "A邸",
+        "契約NO": "T-1",
+        "工種": "防水(全)",
+        "税抜金額": 100000,
+        "消費税": None,
+        "税込金額": 100000,
+        "備考": "",
+        "事業所": "TEST",
+    }
+    result = classify_and_aggregate([row])
+    assert result[0].amount_sales == 100000
+    assert result[0].amount_sales_tax == 0
+
+
+def test_mixed_categories_tax_aggregated_correctly():
+    """1邸に複数カテゴリが混在しても消費税が分離して集計される"""
+    rows = [
+        _row("A邸", "防水(全)", "", 100000, 10000),
+        _row("A邸", "防水(社保)", "生産課中口分", -8000, -800),
+        _row("A邸", "防水シート(相殺)", "", -50000, -5000),
+    ]
+    result = classify_and_aggregate(rows)
+    assert result[0].amount_sales == 100000
+    assert result[0].amount_sales_tax == 10000
+    assert result[0].amount_shaho == 8000
+    assert result[0].amount_shaho_tax == 800
+    assert result[0].amount_materials == 50000
+    assert result[0].amount_materials_tax == 5000

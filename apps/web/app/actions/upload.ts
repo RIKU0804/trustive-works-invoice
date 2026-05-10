@@ -100,10 +100,17 @@ export async function uploadPdf(formData: FormData) {
       property_name: p.property_name,
       contract_no: p.contract_no || null,
       work_summary: p.koji_label || null,
+      // 税抜
       amount_sales: p.amount_sales,
       amount_shaho: p.amount_shaho,
       amount_seisanka: p.amount_seisanka,
       amount_material: p.amount_materials,
+      // 消費税 (進化版要件 260510)
+      amount_sales_tax: p.amount_sales_tax ?? 0,
+      amount_shaho_tax: p.amount_shaho_tax ?? 0,
+      amount_seisanka_tax: p.amount_seisanka_tax ?? 0,
+      amount_material_tax: p.amount_materials_tax ?? 0,
+      // 立替金 (非課税)
       amount_tatekae: p.amount_tatekae ?? 0,
     }));
 

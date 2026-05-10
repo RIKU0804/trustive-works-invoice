@@ -50,10 +50,16 @@ class AggregatedProperty(BaseModel):
     property_name: str
     contract_no: str
     koji_label: str
+    # 税抜額 (各カテゴリの主値)
     amount_sales: int
     amount_shaho: int
     amount_seisanka: int
     amount_materials: int
+    # 消費税額 (進化版要件 260510: カテゴリ別消費税の分離管理)
+    amount_sales_tax: int = 0
+    amount_shaho_tax: int = 0
+    amount_seisanka_tax: int = 0
+    amount_materials_tax: int = 0
     # 立替金 (非課税・税抜=税込)。amount_sales には含まれているが、
     # 振込金額照合の税抜逆算で 1.1 で割らない補正に使うために別途追跡する。
     amount_tatekae: int = 0

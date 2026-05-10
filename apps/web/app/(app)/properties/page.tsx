@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { Inbox, Upload } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
-import { fmtJpy, fmtPercent } from "@/lib/format";
 import MonthSelect from "./MonthSelect";
+import { PropertiesFilters, type PropertyFilterRow } from "./PropertiesFilters";
 
 type Props = {
   searchParams: { month?: string };
@@ -40,12 +40,37 @@ export default async function PropertiesPage({ searchParams }: Props) {
     ? await supabase
         .from("properties")
         .select(
-          "id, property_name, contract_no, amount_sales, amount_shaho, amount_seisanka, amount_material, amount_gross_profit, gross_profit_rate, staff_members(name), payment_notices!inner(report_month)"
+          "id, property_name, contract_no, amount_sales, amount_shaho, amount_seisanka, amount_material, amount_sales_tax, amount_shaho_tax, amount_seisanka_tax, amount_material_tax, amount_gross_profit, gross_profit_rate, staff_members(name), payment_notices!inner(report_month)"
         )
         .eq("organization_id", orgId)
         .eq("payment_notices.report_month", selectedMonth)
         .order("created_at", { ascending: true })
     : { data: [] };
+
+  // フィルタ用に正規化（進化版要件3）
+  const filterRows: PropertyFilterRow[] = (properties ?? []).map((p) => {
+    const staff = Array.isArray(p.staff_members) ? p.staff_members[0] : p.staff_members;
+    return {
+      id: p.id as string,
+      property_name: (p.property_name as string) ?? "",
+      contract_no: (p.contract_no as string | null) ?? null,
+      staff_name: staff?.name ?? null,
+      amount_sales: Number(p.amount_sales ?? 0),
+      amount_shaho: Number(p.amount_shaho ?? 0),
+      amount_seisanka: Number(p.amount_seisanka ?? 0),
+      amount_material: Number(p.amount_material ?? 0),
+      amount_sales_tax: Number(p.amount_sales_tax ?? 0),
+      amount_shaho_tax: Number(p.amount_shaho_tax ?? 0),
+      amount_seisanka_tax: Number(p.amount_seisanka_tax ?? 0),
+      amount_material_tax: Number(p.amount_material_tax ?? 0),
+      amount_gross_profit: Number(p.amount_gross_profit ?? 0),
+      gross_profit_rate: Number(p.gross_profit_rate ?? 0),
+    };
+  });
+
+  const staffOptions = Array.from(
+    new Set(filterRows.map((r) => r.staff_name).filter((v): v is string => Boolean(v)))
+  ).sort();
 
   return (
     <div className="space-y-6">
@@ -97,57 +122,7 @@ export default async function PropertiesPage({ searchParams }: Props) {
           </div>
         </div>
       ) : (
-        <div className="rounded-lg border overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50">
-              <tr>
-                <th className="px-4 py-3 text-left font-medium whitespace-nowrap">邸名</th>
-                <th className="px-4 py-3 text-left font-medium whitespace-nowrap">担当者</th>
-                <th className="px-4 py-3 text-right font-medium whitespace-nowrap">売上</th>
-                <th className="px-4 py-3 text-right font-medium whitespace-nowrap">社保</th>
-                <th className="px-4 py-3 text-right font-medium whitespace-nowrap">精算額</th>
-                <th className="px-4 py-3 text-right font-medium whitespace-nowrap">材料費</th>
-                <th className="px-4 py-3 text-right font-medium whitespace-nowrap">粗利</th>
-                <th className="px-4 py-3 text-right font-medium whitespace-nowrap">粗利率</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {properties.map((p) => {
-                const staff = Array.isArray(p.staff_members)
-                  ? p.staff_members[0]
-                  : p.staff_members;
-                return (
-                  <tr key={p.id} className="hover:bg-muted/30">
-                    <td className="px-4 py-3 font-medium whitespace-nowrap">
-                      {p.property_name}
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
-                      {staff?.name ?? "—"}
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums">
-                      {fmtJpy(p.amount_sales)}
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums">
-                      {fmtJpy(p.amount_shaho)}
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums">
-                      {fmtJpy(p.amount_seisanka)}
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums">
-                      {fmtJpy(p.amount_material)}
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums">
-                      {fmtJpy(p.amount_gross_profit)}
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums">
-                      {fmtPercent(p.gross_profit_rate)}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <PropertiesFilters rows={filterRows} staffOptions={staffOptions} />
       )}
     </div>
   );

@@ -28,6 +28,12 @@ interface PropertyRow {
   amount_shaho: number | string | null;
   amount_seisanka: number | string | null;
   amount_material: number | string | null;
+  // 進化版要件 260510: 消費税フィールド
+  amount_sales_tax: number | string | null;
+  amount_shaho_tax: number | string | null;
+  amount_seisanka_tax: number | string | null;
+  amount_material_tax: number | string | null;
+  amount_tatekae: number | string | null;
   amount_gross_profit: number | string | null;
   gross_profit_rate: number | string | null;
   staff_members: { name: string } | { name: string }[] | null;
@@ -96,6 +102,11 @@ export async function GET(req: NextRequest) {
       amount_shaho,
       amount_seisanka,
       amount_material,
+      amount_sales_tax,
+      amount_shaho_tax,
+      amount_seisanka_tax,
+      amount_material_tax,
+      amount_tatekae,
       amount_gross_profit,
       gross_profit_rate,
       staff_members(name),
@@ -146,14 +157,20 @@ export async function GET(req: NextRequest) {
 // ----------------------------------------------------------------------
 
 function buildCsvResponse(properties: PropertyRow[], month: string): NextResponse {
+  // 進化版要件 260510: カテゴリ別税抜・消費税の8列構造で出力
   const headers = [
     "物件名",
     "契約番号",
     "工事概要",
-    "売上",
-    "社保",
-    "精算額",
-    "材料",
+    "①一般売上(税抜)",
+    "①一般売上(消費税)",
+    "②社保(税抜)",
+    "②社保(消費税)",
+    "③生産課(税抜)",
+    "③生産課(消費税)",
+    "④材料費(税抜)",
+    "④材料費(消費税)",
+    "立替金(非課税)",
     "粗利",
     "粗利率(%)",
     "担当者",
@@ -170,9 +187,14 @@ function buildCsvResponse(properties: PropertyRow[], month: string): NextRespons
       p.contract_no ?? "",
       p.work_summary ?? "",
       String(toNumber(p.amount_sales)),
+      String(toNumber(p.amount_sales_tax)),
       String(toNumber(p.amount_shaho)),
+      String(toNumber(p.amount_shaho_tax)),
       String(toNumber(p.amount_seisanka)),
+      String(toNumber(p.amount_seisanka_tax)),
       String(toNumber(p.amount_material)),
+      String(toNumber(p.amount_material_tax)),
+      String(toNumber(p.amount_tatekae)),
       String(toNumber(p.amount_gross_profit)),
       grossProfitRate,
       staffName,
@@ -221,6 +243,12 @@ async function buildXlsxResponse(
     amountShaho: toNumber(p.amount_shaho),
     amountSeisanka: toNumber(p.amount_seisanka),
     amountMaterial: toNumber(p.amount_material),
+    // 進化版要件 260510: 消費税・立替金を DTO に含める
+    amountSalesTax: toNumber(p.amount_sales_tax),
+    amountShahoTax: toNumber(p.amount_shaho_tax),
+    amountSeisankaTax: toNumber(p.amount_seisanka_tax),
+    amountMaterialTax: toNumber(p.amount_material_tax),
+    amountTatekae: toNumber(p.amount_tatekae),
     staffName: pickStaffName(p.staff_members),
   }));
 

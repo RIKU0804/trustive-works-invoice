@@ -102,10 +102,17 @@ def aggregate_classified_lines(lines: list[dict]) -> list[AggregatedProperty]:
         "邸名": "",
         "契約NO": set(),
         "工事名称": set(),
+        # 税抜
         "D_items": [],
         "E": 0,
         "F": 0,
         "G_items": [],
+        # 消費税 (進化版要件 260510)
+        "D_tax_items": [],
+        "E_tax": 0,
+        "F_tax": 0,
+        "G_tax_items": [],
+        # 立替金
         "tatekae_items": [],
     })
 
@@ -119,6 +126,12 @@ def aggregate_classified_lines(lines: list[dict]) -> list[AggregatedProperty]:
         except (TypeError, ValueError):
             continue
 
+        # 消費税額 (進化版要件 260510)。データが無ければ 0 として扱う。
+        try:
+            tax = int(round(float(row.get("消費税", 0) or 0)))
+        except (TypeError, ValueError):
+            tax = 0
+
         agg = by_tei[tei]
         agg["邸名"] = tei
         agg["契約NO"].add(row.get("契約NO", ""))
@@ -129,15 +142,20 @@ def aggregate_classified_lines(lines: list[dict]) -> list[AggregatedProperty]:
 
         category = row.get("category", "material")
         abs_amount = abs(amount)
+        abs_tax = abs(tax)
 
         if category == "sales":
             agg["D_items"].append(amount if amount >= 0 else abs_amount)
+            agg["D_tax_items"].append(tax if tax >= 0 else abs_tax)
         elif category == "shaho":
             agg["E"] += abs_amount
+            agg["E_tax"] += abs_tax
         elif category == "seisanka":
             agg["F"] += abs_amount
+            agg["F_tax"] += abs_tax
         elif category == "tatekae":
             # 立替金は売上(D)に含めつつ別フィールドで追跡 (v1.2.4 invoice-tool 仕様)
+            # 立替金は非課税扱い (税抜=税込) のため消費税は 0 で確定
             agg["tatekae_items"].append(amount)
             if amount >= 0:
                 agg["D_items"].append(amount)
@@ -145,6 +163,7 @@ def aggregate_classified_lines(lines: list[dict]) -> list[AggregatedProperty]:
                 agg["G_items"].append(abs_amount)
         else:  # material
             agg["G_items"].append(abs_amount)
+            agg["G_tax_items"].append(abs_tax)
 
     return _finalize_aggregate(by_tei)
 
@@ -175,6 +194,11 @@ def _finalize_aggregate(by_tei: dict) -> list[AggregatedProperty]:
         amount_seisanka = agg["F"]
         amount_materials = sum(agg["G_items"])
         amount_tatekae = sum(agg["tatekae_items"])
+        # 消費税 (進化版要件 260510)
+        amount_sales_tax = sum(agg["D_tax_items"])
+        amount_shaho_tax = agg["E_tax"]
+        amount_seisanka_tax = agg["F_tax"]
+        amount_materials_tax = sum(agg["G_tax_items"])
         amount_other = 0
         gross_profit = amount_sales - amount_shaho - amount_seisanka - amount_materials - amount_other
 
@@ -192,6 +216,10 @@ def _finalize_aggregate(by_tei: dict) -> list[AggregatedProperty]:
             amount_shaho=amount_shaho,
             amount_seisanka=amount_seisanka,
             amount_materials=amount_materials,
+            amount_sales_tax=amount_sales_tax,
+            amount_shaho_tax=amount_shaho_tax,
+            amount_seisanka_tax=amount_seisanka_tax,
+            amount_materials_tax=amount_materials_tax,
             amount_tatekae=amount_tatekae,
             amount_other=amount_other,
             gross_profit=gross_profit,

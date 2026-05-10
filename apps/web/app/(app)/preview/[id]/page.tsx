@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { fmtJpy } from "@/lib/format";
 import { ParsingPoller } from "./ParsingPoller";
 import { FailedNoticeActions } from "./FailedNoticeActions";
+import { PropertyEditDialog } from "./PropertyEditDialog";
 
 const LOW_CONFIDENCE_THRESHOLD = 0.7;
 
@@ -55,6 +56,18 @@ export default async function PreviewPage({ params }: { params: { id: string } }
     .eq("payment_notice_id", params.id)
     .eq("organization_id", membership.organization_id)
     .order("property_name");
+
+  // 編集ダイアログ用に組織内の班長一覧を取得
+  const { data: staffRows } = await supabase
+    .from("staff_members")
+    .select("id, name")
+    .eq("organization_id", membership.organization_id)
+    .eq("is_active", true)
+    .order("display_order");
+  const staffOptions = (staffRows ?? []).map((s) => ({
+    id: s.id as string,
+    name: s.name as string,
+  }));
 
   const propertyIds = (properties ?? []).map((p) => p.id);
   const { data: lines } = propertyIds.length
@@ -171,18 +184,25 @@ export default async function PreviewPage({ params }: { params: { id: string } }
           </div>
 
           <div>
-            <h2 className="text-sm font-semibold mb-3">物件一覧（{properties?.length ?? 0}件）</h2>
-            <div className="rounded-lg border overflow-hidden">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold">物件一覧（{properties?.length ?? 0}件）</h2>
+              <p className="text-xs text-muted-foreground">
+                各カテゴリは <span className="font-medium">税抜額</span> 上段 /{" "}
+                <span className="text-muted-foreground/80">(税)</span> 下段
+              </p>
+            </div>
+            <div className="rounded-lg border overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-muted/50">
                   <tr>
                     <th className="px-3 py-2 text-left font-medium">物件名</th>
                     <th className="px-3 py-2 text-center font-medium">班長</th>
-                    <th className="px-3 py-2 text-right font-medium">売上</th>
-                    <th className="px-3 py-2 text-right font-medium">社保</th>
-                    <th className="px-3 py-2 text-right font-medium">精算額</th>
-                    <th className="px-3 py-2 text-right font-medium">材料</th>
-                    <th className="px-3 py-2 text-right font-medium">粗利</th>
+                    <th className="px-3 py-2 text-right font-medium">①一般売上</th>
+                    <th className="px-3 py-2 text-right font-medium">②社保</th>
+                    <th className="px-3 py-2 text-right font-medium">③生産課</th>
+                    <th className="px-3 py-2 text-right font-medium">④材料費</th>
+                    <th className="px-3 py-2 text-right font-medium">⑦粗利</th>
+                    <th className="px-3 py-2 text-center font-medium w-16">操作</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
@@ -190,16 +210,59 @@ export default async function PreviewPage({ params }: { params: { id: string } }
                     const staffName =
                       (p as { staff_members?: { name: string } | null }).staff_members?.name ?? "";
                     return (
-                      <tr key={p.id} className="hover:bg-muted/30">
+                      <tr key={p.id} className="hover:bg-muted/30 align-top">
                         <td className="px-3 py-2">{p.property_name}</td>
                         <td className="px-3 py-2 text-center">
                           {staffName || <span className="text-red-500 text-xs">未</span>}
                         </td>
-                        <td className="px-3 py-2 text-right">{fmtJpy(p.amount_sales)}</td>
-                        <td className="px-3 py-2 text-right">{fmtJpy(p.amount_shaho)}</td>
-                        <td className="px-3 py-2 text-right">{fmtJpy(p.amount_seisanka)}</td>
-                        <td className="px-3 py-2 text-right">{fmtJpy(p.amount_material)}</td>
-                        <td className="px-3 py-2 text-right font-medium">{fmtJpy(p.amount_gross_profit)}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">
+                          <div>{fmtJpy(p.amount_sales)}</div>
+                          <div className="text-xs text-muted-foreground">
+                            (税 {fmtJpy(p.amount_sales_tax ?? 0)})
+                          </div>
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums">
+                          <div>{fmtJpy(p.amount_shaho)}</div>
+                          <div className="text-xs text-muted-foreground">
+                            (税 {fmtJpy(p.amount_shaho_tax ?? 0)})
+                          </div>
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums">
+                          <div>{fmtJpy(p.amount_seisanka)}</div>
+                          <div className="text-xs text-muted-foreground">
+                            (税 {fmtJpy(p.amount_seisanka_tax ?? 0)})
+                          </div>
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums">
+                          <div>{fmtJpy(p.amount_material)}</div>
+                          <div className="text-xs text-muted-foreground">
+                            (税 {fmtJpy(p.amount_material_tax ?? 0)})
+                          </div>
+                        </td>
+                        <td className="px-3 py-2 text-right font-medium tabular-nums">
+                          {fmtJpy(p.amount_gross_profit)}
+                        </td>
+                        <td className="px-3 py-2 text-center">
+                          <PropertyEditDialog
+                            property={{
+                              id: p.id,
+                              property_name: p.property_name,
+                              contract_no: p.contract_no ?? null,
+                              work_summary: p.work_summary ?? null,
+                              amount_sales: Number(p.amount_sales ?? 0),
+                              amount_shaho: Number(p.amount_shaho ?? 0),
+                              amount_seisanka: Number(p.amount_seisanka ?? 0),
+                              amount_material: Number(p.amount_material ?? 0),
+                              amount_sales_tax: Number(p.amount_sales_tax ?? 0),
+                              amount_shaho_tax: Number(p.amount_shaho_tax ?? 0),
+                              amount_seisanka_tax: Number(p.amount_seisanka_tax ?? 0),
+                              amount_material_tax: Number(p.amount_material_tax ?? 0),
+                              amount_tatekae: Number(p.amount_tatekae ?? 0),
+                              staff_member_id: p.staff_member_id ?? null,
+                            }}
+                            staffOptions={staffOptions}
+                          />
+                        </td>
                       </tr>
                     );
                   })}

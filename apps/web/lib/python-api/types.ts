@@ -5,10 +5,22 @@ export type AggregatedProperty = {
   property_name: string;
   contract_no: string;
   koji_label: string;
+  /** ①一般売上 (税抜) */
   amount_sales: number;
+  /** ②社保 (税抜・絶対値) */
   amount_shaho: number;
+  /** ③生産課 (税抜・絶対値) */
   amount_seisanka: number;
+  /** ④材料費 (税抜・絶対値) */
   amount_materials: number;
+  /** ①一般売上の消費税額 (進化版要件 260510) */
+  amount_sales_tax: number;
+  /** ②社保の消費税額 (進化版要件 260510) */
+  amount_shaho_tax: number;
+  /** ③生産課の消費税額 (進化版要件 260510) */
+  amount_seisanka_tax: number;
+  /** ④材料費の消費税額 (進化版要件 260510) */
+  amount_materials_tax: number;
   /**
    * 立替金 (非課税・税抜=税込)。
    * amount_sales には含まれているが、振込金額照合の税抜逆算で

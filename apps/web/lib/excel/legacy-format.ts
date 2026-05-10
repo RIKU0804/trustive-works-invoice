@@ -56,6 +56,16 @@ export interface LegacyPropertyRow {
   amountShaho: number;
   amountSeisanka: number;
   amountMaterial: number;
+  /**
+   * カテゴリ別消費税 (進化版要件 260510)。
+   * legacy XLSX では未使用だが、進化版フォーマット用に DTO に保持する。
+   */
+  amountSalesTax?: number;
+  amountShahoTax?: number;
+  amountSeisankaTax?: number;
+  amountMaterialTax?: number;
+  /** 立替金（非課税・税抜=税込） */
+  amountTatekae?: number;
   /** 外注小林（PDFには現状無し、将来用に0で確保） */
   amountSubcontractKobayashi?: number;
   /** 外注南（同上） */
