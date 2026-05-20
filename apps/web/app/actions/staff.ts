@@ -1,29 +1,15 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createClient } from "@/lib/supabase/server";
+import { requireOrgAdmin, getCallerContext } from "@/lib/auth/membership";
 import { logAction } from "@/lib/audit";
 
 export async function addStaffMember(formData: FormData) {
-  const supabase = createClient();
   const name = formData.get("name") as string;
 
   if (!name?.trim()) throw new Error("名前を入力してください");
 
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error("認証が必要です");
-
-  const { data: membership, error: membershipError } = await supabase
-    .from("memberships")
-    .select("organization_id, role")
-    .eq("user_id", user.id)
-    .single();
-
-  if (membershipError || !membership) throw new Error("組織が見つかりません");
-  if (membership.role !== "owner" && membership.role !== "admin") {
-    throw new Error("この操作を行う権限がありません");
-  }
-
+  const { supabase, user, membership } = await requireOrgAdmin();
   const orgId = membership.organization_id;
 
   const { data: max } = await supabase
@@ -32,7 +18,7 @@ export async function addStaffMember(formData: FormData) {
     .eq("organization_id", orgId)
     .order("display_order", { ascending: false })
     .limit(1)
-    .single();
+    .maybeSingle();
 
   const displayOrder = (max?.display_order ?? 0) + 1;
   const trimmedName = name.trim();
@@ -64,12 +50,7 @@ export async function addStaffMember(formData: FormData) {
 }
 
 export async function assignStaff(propertyId: string, staffMemberId: string | null) {
-  const supabase = createClient();
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error("認証が必要です");
+  const { supabase, user, membership } = await getCallerContext();
 
   // 変更前のpropertyを取得（before/after記録のため）
   const { data: previous, error: prevError } = await supabase
@@ -82,13 +63,19 @@ export async function assignStaff(propertyId: string, staffMemberId: string | nu
     throw new Error("対象の物件が見つかりません");
   }
 
+  // 物件が呼び出し元の組織に属することを明示検証
+  // (RLS 任せにせず多層防御。クロスオーグ攻撃対策)
+  if (previous.organization_id !== membership.organization_id) {
+    throw new Error("この物件を編集する権限がありません");
+  }
+
   // 担当者IDも同じ組織に所属することを確認（クロスオーグ攻撃対策）
   if (staffMemberId) {
     const { data: staffCheck } = await supabase
       .from("staff_members")
       .select("organization_id")
       .eq("id", staffMemberId)
-      .single();
+      .maybeSingle();
     if (!staffCheck || staffCheck.organization_id !== previous.organization_id) {
       throw new Error("無効な担当者IDです");
     }

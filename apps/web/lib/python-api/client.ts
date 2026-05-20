@@ -3,22 +3,47 @@ import type { ParseResponse } from "./types";
 const API_URL = process.env.PYTHON_API_URL!;
 const API_KEY = process.env.PYTHON_API_KEY!;
 
+// PDF 解析 + AI 分類は時間がかかりうるが、ハングした上流で Server Action /
+// Node ソケットが無限に占有されるのを防ぐため上限を設ける。
+const REQUEST_TIMEOUT_MS = 180_000;
+// 上流が暴走して巨大ボディを返した場合のメモリ保護 (32MB)
+const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
+
 export async function parsePdf(file: File, organizationId: string): Promise<ParseResponse> {
   const form = new FormData();
   form.append("file", file);
 
-  const res = await fetch(`${API_URL}/pdf/parse`, {
-    method: "POST",
-    headers: {
-      "X-API-Key": API_KEY,
-      "X-Organization-Id": organizationId,
-    },
-    body: form,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}/pdf/parse`, {
+      method: "POST",
+      headers: {
+        "X-API-Key": API_KEY,
+        "X-Organization-Id": organizationId,
+      },
+      body: form,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "TimeoutError") {
+      throw new Error("解析サーバの応答がタイムアウトしました");
+    }
+    throw new Error("解析サーバに接続できませんでした");
+  }
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail ?? `Python API error: ${res.status}`);
+  }
+
+  // 上流が JSON 以外 / 異常に巨大なボディを返した場合の保護
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    throw new Error("解析サーバから不正な応答を受信しました");
+  }
+  const contentLength = Number(res.headers.get("content-length") ?? "0");
+  if (contentLength > MAX_RESPONSE_BYTES) {
+    throw new Error("解析サーバの応答が大きすぎます");
   }
 
   return res.json();

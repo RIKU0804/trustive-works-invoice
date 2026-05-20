@@ -1,6 +1,7 @@
 // Bulk-import PDF payment notices via service role.
 // Usage: node scripts/bulk-import.mjs <directory>
 import { createClient } from "@supabase/supabase-js";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,14 +21,51 @@ const env = Object.fromEntries(
 const SUPABASE_URL = env.NEXT_PUBLIC_SUPABASE_URL;
 const SERVICE_KEY = env.SUPABASE_SERVICE_ROLE_KEY;
 const PYTHON_API_URL = env.PYTHON_API_URL || "http://localhost:8001";
-const PYTHON_API_KEY = env.PYTHON_API_KEY || "dev-secret-key";
-const ORG_ID = "a1b2c3d4-0000-0000-0000-000000000001";
+const PYTHON_API_KEY = env.PYTHON_API_KEY;
+// 既定のデモ org。誤って本番テナントへ書かないよう env で明示上書き可能。
+const ORG_ID = env.IMPORT_ORG_ID || "a1b2c3d4-0000-0000-0000-000000000001";
 const dir = process.argv[2];
 
 if (!dir) {
   console.error("Usage: node scripts/bulk-import.mjs <directory>");
   process.exit(1);
 }
+
+// service_role キーで RLS を無視するスクリプトのため、本番 URL への
+// 誤実行を防ぐ。ローカル/プライベート宛先のみ許可する。
+function assertLocalTarget(url) {
+  let host;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    console.error(`不正な SUPABASE_URL: ${url}`);
+    process.exit(1);
+  }
+  const localOk =
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "host.docker.internal" ||
+    host.endsWith(".local") ||
+    host.startsWith("192.168.") ||
+    host.startsWith("10.");
+  if (!localOk && env.ALLOW_REMOTE_BULK_IMPORT !== "1") {
+    console.error(
+      `[安全装置] 非ローカルの SUPABASE_URL (${host}) への一括取込を拒否しました。\n` +
+        `本当に実行する場合のみ ALLOW_REMOTE_BULK_IMPORT=1 を設定してください。`
+    );
+    process.exit(1);
+  }
+}
+
+if (!SUPABASE_URL || !SERVICE_KEY) {
+  console.error("NEXT_PUBLIC_SUPABASE_URL と SUPABASE_SERVICE_ROLE_KEY が必要です");
+  process.exit(1);
+}
+if (!PYTHON_API_KEY) {
+  console.error("PYTHON_API_KEY が必要です (.env.local に設定してください)");
+  process.exit(1);
+}
+assertLocalTarget(SUPABASE_URL);
 
 const supabase = createClient(SUPABASE_URL, SERVICE_KEY, {
   auth: { autoRefreshToken: false, persistSession: false },
@@ -50,9 +88,11 @@ async function getOrCreateBotUser() {
   const bot = users?.users?.find((u) => u.email === "bot@local.dev");
   if (bot) return bot.id;
 
+  // ログインには使わない (bot は service_role で動作)。推測可能な固定
+  // パスワードを置かないよう毎回ランダム生成する。
   const { data, error } = await supabase.auth.admin.createUser({
     email: "bot@local.dev",
-    password: "bot-password-12345",
+    password: crypto.randomBytes(24).toString("base64url"),
     email_confirm: true,
   });
   if (error) throw new Error(`bot create failed: ${error.message}`);

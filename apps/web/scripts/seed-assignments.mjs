@@ -16,10 +16,42 @@ const env = Object.fromEntries(
     })
 );
 
+// service_role キーで RLS を無視するデモ用スクリプト。本番 URL への
+// 誤実行を防ぐためローカル/プライベート宛先のみ許可する。
+function assertLocalTarget(url) {
+  let host;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    console.error(`不正な SUPABASE_URL: ${url}`);
+    process.exit(1);
+  }
+  const localOk =
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "host.docker.internal" ||
+    host.endsWith(".local") ||
+    host.startsWith("192.168.") ||
+    host.startsWith("10.");
+  if (!localOk && env.ALLOW_REMOTE_SEED !== "1") {
+    console.error(
+      `[安全装置] 非ローカルの SUPABASE_URL (${host}) への seed を拒否しました。\n` +
+        `本当に実行する場合のみ ALLOW_REMOTE_SEED=1 を設定してください。`
+    );
+    process.exit(1);
+  }
+}
+
+if (!env.NEXT_PUBLIC_SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
+  console.error("NEXT_PUBLIC_SUPABASE_URL と SUPABASE_SERVICE_ROLE_KEY が必要です");
+  process.exit(1);
+}
+assertLocalTarget(env.NEXT_PUBLIC_SUPABASE_URL);
+
 const supabase = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
   auth: { autoRefreshToken: false, persistSession: false },
 });
-const ORG_ID = "a1b2c3d4-0000-0000-0000-000000000001";
+const ORG_ID = env.IMPORT_ORG_ID || "a1b2c3d4-0000-0000-0000-000000000001";
 
 const { data: staff } = await supabase
   .from("staff_members")

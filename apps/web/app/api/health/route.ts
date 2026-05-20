@@ -7,5 +7,6 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export function GET() {
-  return NextResponse.json({ status: "ok", uptime: process.uptime() });
+  // 認証なしエンドポイントのため内部情報 (uptime 等) は返さない
+  return NextResponse.json({ status: "ok" });
 }

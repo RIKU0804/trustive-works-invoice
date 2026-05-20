@@ -1,1 +1,7 @@
 .vercel
+
+# 多層防御: service_role キー等を含む env をリポジトリに入れない
+.env
+.env.*
+!.env.local.example
+!.env.example

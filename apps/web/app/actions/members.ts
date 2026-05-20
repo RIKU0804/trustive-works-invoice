@@ -2,32 +2,13 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { requireOrgAdmin } from "@/lib/auth/membership";
 import { logAction } from "@/lib/audit";
 
 type MemberRole = "owner" | "admin" | "member";
 type InvitableRole = Exclude<MemberRole, "owner">;
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-async function getCallerMembership() {
-  const supabase = createClient();
-
-  const { data: { user }, error: authError } = await supabase.auth.getUser();
-  if (authError || !user) throw new Error("認証が必要です");
-
-  const { data: membership, error } = await supabase
-    .from("memberships")
-    .select("id, user_id, organization_id, role")
-    .eq("user_id", user.id)
-    .single();
-
-  if (error || !membership) throw new Error("メンバーシップが見つかりません");
-  if (membership.role !== "owner" && membership.role !== "admin") {
-    throw new Error("この操作を行う権限がありません");
-  }
-
-  return { supabase, user, membership };
-}
 
 async function getTargetMembership(
   supabase: ReturnType<typeof createClient>,
@@ -49,7 +30,7 @@ export async function updateMemberRole(
   membershipId: string,
   role: MemberRole
 ): Promise<void> {
-  const { supabase, user, membership } = await getCallerMembership();
+  const { supabase, user, membership } = await requireOrgAdmin();
   const target = await getTargetMembership(supabase, membershipId, membership.organization_id);
 
   if (target.user_id === user.id) throw new Error("自分自身の役割は変更できません");
@@ -87,7 +68,7 @@ export async function updateMemberRole(
 }
 
 export async function removeMember(membershipId: string): Promise<void> {
-  const { supabase, user, membership } = await getCallerMembership();
+  const { supabase, user, membership } = await requireOrgAdmin();
   const target = await getTargetMembership(supabase, membershipId, membership.organization_id);
 
   if (target.user_id === user.id) throw new Error("自分自身は削除できません");
@@ -131,7 +112,7 @@ export async function inviteMember(
     throw new Error("招待時に付与できる役割は admin か member のみです");
   }
 
-  const { supabase, user, membership } = await getCallerMembership();
+  const { supabase, user, membership } = await requireOrgAdmin();
   const orgId = membership.organization_id;
 
   const serviceClient = createServiceClient();

@@ -26,6 +26,54 @@ volumes:
 
 services:
   # ──────────────────────────────────────────────────────────────────────────
+  # Preflight: 弱い/既定シークレットのまま起動するのを拒否する (フェイルファスト)
+  # 既知の JWT_SECRET は service_role トークン偽造 = 全 RLS 突破に直結するため
+  # db より前に必ず通す。
+  # ──────────────────────────────────────────────────────────────────────────
+  preflight:
+    image: alpine:3.20
+    container_name: invoice-preflight
+    networks: [invoice-net]
+    restart: "no"
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD}
+      PYTHON_API_KEY: ${PYTHON_API_KEY}
+      ANON_KEY: ${ANON_KEY}
+      SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
+    command:
+      - sh
+      - -ec
+      - |
+        fail=0
+        # 値が空 / プレースホルダ / 既定の安全でない値 / 短すぎる場合に失敗
+        check() {
+          name="$$1"; val="$$2"; min="$$3"
+          case "$$val" in
+            "" ) echo "[preflight] $$name が未設定です"; fail=1; return;;
+            *please-change-me* | dev-secret | dev-secret-key | *your-secret-key-here* )
+              echo "[preflight] $$name が既定の安全でない値です。deploy/init.sh を実行してください"; fail=1; return;;
+          esac
+          if [ "$${#val}" -lt "$$min" ]; then
+            echo "[preflight] $$name が短すぎます (>= $$min 文字必須)"; fail=1
+          fi
+        }
+        check POSTGRES_PASSWORD "$$POSTGRES_PASSWORD" 16
+        check JWT_SECRET        "$$JWT_SECRET"        32
+        check SECRET_KEY_BASE   "$$SECRET_KEY_BASE"   32
+        check DASHBOARD_PASSWORD "$$DASHBOARD_PASSWORD" 12
+        check PYTHON_API_KEY    "$$PYTHON_API_KEY"    16
+        check ANON_KEY          "$$ANON_KEY"          20
+        check SERVICE_ROLE_KEY  "$$SERVICE_ROLE_KEY"  20
+        if [ "$$fail" -ne 0 ]; then
+          echo "[preflight] シークレット検証に失敗しました。起動を中止します。"
+          exit 1
+        fi
+        echo "[preflight] OK — シークレット検証を通過"
+
+  # ──────────────────────────────────────────────────────────────────────────
   # Supabase: Postgres
   # ──────────────────────────────────────────────────────────────────────────
   db:
@@ -33,6 +81,9 @@ services:
     container_name: supabase-db
     restart: unless-stopped
     networks: [invoice-net]
+    depends_on:
+      preflight:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "postgres", "-h", "localhost"]
       interval: 10s
@@ -85,7 +136,8 @@ services:
 
       GOTRUE_SITE_URL: ${SITE_URL}
       GOTRUE_URI_ALLOW_LIST: ${ADDITIONAL_REDIRECT_URLS}
-      GOTRUE_DISABLE_SIGNUP: ${DISABLE_SIGNUP:-false}
+      # 既定で公開サインアップ無効 (組織参加は招待フローのみ)
+      GOTRUE_DISABLE_SIGNUP: ${DISABLE_SIGNUP:-true}
 
       GOTRUE_JWT_ADMIN_ROLES: service_role
       GOTRUE_JWT_AUD: authenticated
@@ -138,6 +190,9 @@ services:
     container_name: supabase-realtime
     restart: unless-stopped
     networks: [invoice-net]
+    # このアプリは Realtime を使わない。既定起動から除外しコスト/RAM を削減。
+    # 必要時のみ: docker compose --profile unused up -d
+    profiles: ["unused"]
     depends_on:
       db:
         condition: service_healthy
@@ -177,8 +232,6 @@ services:
         condition: service_healthy
       rest:
         condition: service_started
-      imgproxy:
-        condition: service_started
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/status"]
       interval: 10s
@@ -196,8 +249,7 @@ services:
       TENANT_ID: stub
       REGION: stub
       GLOBAL_S3_BUCKET: stub
-      ENABLE_IMAGE_TRANSFORMATION: "true"
-      IMGPROXY_URL: http://imgproxy:5001
+      ENABLE_IMAGE_TRANSFORMATION: "false"
     volumes:
       - storage-data:/var/lib/storage:z
 
@@ -209,6 +261,8 @@ services:
     container_name: supabase-imgproxy
     restart: unless-stopped
     networks: [invoice-net]
+    # 画像変換は不要 (PDF のみ扱う)。既定起動から除外。
+    profiles: ["unused"]
     healthcheck:
       test: ["CMD", "imgproxy", "health"]
       interval: 10s
@@ -230,6 +284,9 @@ services:
     container_name: supabase-meta
     restart: unless-stopped
     networks: [invoice-net]
+    # Studio 専用。通常運用では不要。管理時のみ:
+    #   docker compose --profile admin up -d meta studio
+    profiles: ["admin"]
     depends_on:
       db:
         condition: service_healthy
@@ -249,6 +306,9 @@ services:
     container_name: supabase-studio
     restart: unless-stopped
     networks: [invoice-net]
+    # 管理画面。本番常時起動は不要 (RAM 節約 + 攻撃面削減)。
+    # 必要時のみ: docker compose --profile admin up -d meta studio
+    profiles: ["admin"]
     depends_on:
       meta:
         condition: service_started
@@ -289,13 +349,7 @@ services:
         condition: service_started
       rest:
         condition: service_started
-      realtime:
-        condition: service_started
       storage:
-        condition: service_started
-      meta:
-        condition: service_started
-      studio:
         condition: service_started
     environment:
       KONG_DATABASE: "off"
@@ -343,6 +397,8 @@ services:
     environment:
       PORT: 8001
       API_KEY: ${PYTHON_API_KEY}
+      # 既定 false = AI 課金ゼロ (ルールベースのみ)。使う場合のみ true + キー設定。
+      AI_ENABLED: ${AI_ENABLED:-false}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       # Internal Supabase URL (kong is the gateway inside the network)
@@ -419,6 +475,7 @@ services:
       API_DOMAIN: ${API_DOMAIN}
       STUDIO_DOMAIN: ${STUDIO_DOMAIN}
       ACME_EMAIL: ${ACME_EMAIL}
+      STUDIO_ALLOWED_IPS: ${STUDIO_ALLOWED_IPS:-127.0.0.1/32 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

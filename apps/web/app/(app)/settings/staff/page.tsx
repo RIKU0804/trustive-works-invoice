@@ -1,28 +1,21 @@
-import { createClient } from "@/lib/supabase/server";
+import { redirect } from "next/navigation";
+import { resolveCaller } from "@/lib/auth/membership";
 import { AddStaffForm } from "./AddStaffForm";
 
 export default async function StaffSettingsPage() {
-  const supabase = createClient();
+  const caller = await resolveCaller();
+  if (caller.kind === "unauthenticated") redirect("/login");
+  if (caller.kind !== "ok") return null;
 
-  const { data: { user } } = await supabase.auth.getUser();
-  const { data: membership } = user
-    ? await supabase
-        .from("memberships")
-        .select("organization_id, role")
-        .eq("user_id", user.id)
-        .single()
-    : { data: null };
+  const { supabase, membership } = caller.ctx;
+  const orgId = membership.organization_id;
+  const isAdmin = membership.role === "owner" || membership.role === "admin";
 
-  const orgId = membership?.organization_id;
-  const isAdmin = membership?.role === "owner" || membership?.role === "admin";
-
-  const { data: staff } = orgId
-    ? await supabase
-        .from("staff_members")
-        .select("*")
-        .eq("organization_id", orgId)
-        .order("display_order")
-    : { data: [] };
+  const { data: staff } = await supabase
+    .from("staff_members")
+    .select("*")
+    .eq("organization_id", orgId)
+    .order("display_order");
 
   return (
     <div className="space-y-6 max-w-2xl">
@@ -61,7 +54,7 @@ export default async function StaffSettingsPage() {
         </table>
       </div>
 
-      {isAdmin && orgId && <AddStaffForm />}
+      {isAdmin && <AddStaffForm />}
     </div>
   );
 }

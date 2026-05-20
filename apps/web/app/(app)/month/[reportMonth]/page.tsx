@@ -1,28 +1,21 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
-import { createClient } from "@/lib/supabase/server";
+import { resolveCaller } from "@/lib/auth/membership";
 import { MonthGrid, type PropertyRow, type StaffOption } from "./MonthGrid";
 import { fmtJpy } from "@/lib/format";
 
 type Params = { reportMonth: string };
 
 export default async function MonthDetailPage({ params }: { params: Params }) {
-  const supabase = createClient();
-
   const match = params.reportMonth.match(/^(\d{4})-(\d{2})/);
   if (!match) notFound();
   const monthStart = `${match[1]}-${match[2]}-01`;
 
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) notFound();
+  const caller = await resolveCaller();
+  if (caller.kind === "unauthenticated") redirect("/login");
+  if (caller.kind !== "ok") notFound();
 
-  const { data: membership } = await supabase
-    .from("memberships")
-    .select("organization_id")
-    .eq("user_id", user.id)
-    .single();
-  if (!membership) notFound();
-
+  const { supabase, membership } = caller.ctx;
   const orgId = membership.organization_id;
 
   const { data: notices } = await supabase

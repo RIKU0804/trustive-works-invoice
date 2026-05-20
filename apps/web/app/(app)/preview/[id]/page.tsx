@@ -1,6 +1,6 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { AlertTriangle } from "lucide-react";
-import { createClient } from "@/lib/supabase/server";
+import { resolveCaller } from "@/lib/auth/membership";
 import { fmtJpy } from "@/lib/format";
 import { ParsingPoller } from "./ParsingPoller";
 import { FailedNoticeActions } from "./FailedNoticeActions";
@@ -28,18 +28,11 @@ const METHOD_BADGE_CLASS: Record<string, string> = {
 };
 
 export default async function PreviewPage({ params }: { params: { id: string } }) {
-  const supabase = createClient();
+  const caller = await resolveCaller();
+  if (caller.kind === "unauthenticated") redirect("/login");
+  if (caller.kind !== "ok") notFound();
 
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) notFound();
-
-  const { data: membership } = await supabase
-    .from("memberships")
-    .select("organization_id")
-    .eq("user_id", user.id)
-    .single();
-
-  if (!membership) notFound();
+  const { supabase, membership } = caller.ctx;
 
   const { data: notice } = await supabase
     .from("payment_notices")

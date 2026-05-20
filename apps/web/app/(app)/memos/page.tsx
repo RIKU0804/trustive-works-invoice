@@ -1,39 +1,30 @@
-import { createClient } from "@/lib/supabase/server";
+import { redirect } from "next/navigation";
+import { resolveCaller } from "@/lib/auth/membership";
 import { MemoEditor } from "./MemoEditor";
 
 export default async function MemosPage() {
-  const supabase = createClient();
+  const caller = await resolveCaller();
+  if (caller.kind === "unauthenticated") redirect("/login");
+  if (caller.kind !== "ok") return null;
 
-  const { data: { user } } = await supabase.auth.getUser();
-  const { data: membership } = user
-    ? await supabase
-        .from("memberships")
-        .select("organization_id")
-        .eq("user_id", user.id)
-        .single()
-    : { data: null };
+  const { supabase, membership } = caller.ctx;
+  const orgId = membership.organization_id;
 
-  const orgId = membership?.organization_id;
-
-  const { data: notices } = orgId
-    ? await supabase
-        .from("payment_notices")
-        .select("report_month")
-        .eq("organization_id", orgId)
-        .eq("parse_status", "completed")
-        .order("report_month", { ascending: false })
-    : { data: [] };
+  const { data: notices } = await supabase
+    .from("payment_notices")
+    .select("report_month")
+    .eq("organization_id", orgId)
+    .eq("parse_status", "completed")
+    .order("report_month", { ascending: false });
 
   const months = Array.from(
     new Set((notices ?? []).map((n) => n.report_month).filter(Boolean))
   ) as string[];
 
-  const { data: memos } = orgId
-    ? await supabase
-        .from("monthly_memos")
-        .select("report_month, content")
-        .eq("organization_id", orgId)
-    : { data: [] };
+  const { data: memos } = await supabase
+    .from("monthly_memos")
+    .select("report_month, content")
+    .eq("organization_id", orgId);
 
   const memoMap = new Map(
     (memos ?? []).map((m) => [m.report_month, m.content])
@@ -60,12 +51,10 @@ export default async function MemosPage() {
               <h2 className="text-sm font-semibold text-gray-900">
                 {month.replace(/^(\d{4})-(\d{2})$/, "$1年$2月")}
               </h2>
-              {orgId && (
-                <MemoEditor
-                  reportMonth={month}
-                  initialContent={memoMap.get(month) ?? ""}
-                />
-              )}
+              <MemoEditor
+                reportMonth={month}
+                initialContent={memoMap.get(month) ?? ""}
+              />
             </div>
           ))}
         </div>

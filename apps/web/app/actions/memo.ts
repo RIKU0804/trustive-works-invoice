@@ -1,15 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createClient } from "@/lib/supabase/server";
-import { redirect } from "next/navigation";
+import { getCallerContext } from "@/lib/auth/membership";
 
 export async function upsertMemo(formData: FormData) {
-  const supabase = createClient();
-
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) redirect("/login");
-
   const reportMonth = formData.get("reportMonth") as string;
   const content = formData.get("content") as string;
 
@@ -18,15 +12,7 @@ export async function upsertMemo(formData: FormData) {
   }
 
   // 組織IDはサーバ側でcaller認証情報から解決（IDOR対策: クライアント入力を信頼しない）
-  const { data: membership, error: membershipError } = await supabase
-    .from("memberships")
-    .select("organization_id")
-    .eq("user_id", user.id)
-    .single();
-
-  if (membershipError || !membership) {
-    throw new Error("組織が見つかりません");
-  }
+  const { supabase, user, membership } = await getCallerContext();
 
   const { error } = await supabase
     .from("monthly_memos")

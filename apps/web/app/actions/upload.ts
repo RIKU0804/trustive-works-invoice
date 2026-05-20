@@ -1,7 +1,8 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
+import { getCallerContext } from "@/lib/auth/membership";
 import { parsePdf } from "@/lib/python-api/client";
 import type { ClassifiedLine, ParseResponse } from "@/lib/python-api/types";
 import { logAction } from "@/lib/audit";
@@ -15,11 +16,9 @@ function parseJapaneseDate(s: string | null | undefined): string | null {
 }
 
 export async function uploadPdf(formData: FormData) {
-  const supabase = createClient();
   const serviceClient = createServiceClient();
 
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) redirect("/login");
+  const { user, membership } = await getCallerContext();
 
   const file = formData.get("file") as File;
   if (!file || file.type !== "application/pdf") {
@@ -30,22 +29,43 @@ export async function uploadPdf(formData: FormData) {
   if (file.size > MAX_FILE_SIZE) {
     throw new Error("ファイルサイズは50MBまでです");
   }
-  // 日本語ファイル名のmojibake回避: クライアントから別フィールドで明示的にUTF-8文字列を受ける
-  const originalFileName = (formData.get("originalFileName") as string) || file.name;
+  if (file.size === 0) {
+    throw new Error("空のファイルです");
+  }
+  // file.type はクライアント任意のため信頼しない。先頭バイトで PDF を確認する。
+  const headBytes = new Uint8Array(await file.slice(0, 5).arrayBuffer());
+  const isPdfMagic =
+    headBytes.length >= 5 &&
+    headBytes[0] === 0x25 && // %
+    headBytes[1] === 0x50 && // P
+    headBytes[2] === 0x44 && // D
+    headBytes[3] === 0x46 && // F
+    headBytes[4] === 0x2d; //  -
+  if (!isPdfMagic) {
+    throw new Error("PDFファイルではありません");
+  }
+
+  // 日本語ファイル名のmojibake回避: クライアントから別フィールドで明示的にUTF-8文字列を受ける。
+  // 制御文字 (CR/LF/NUL/DEL 等) を除去し長さを 255 に制限する。
+  // → 後段の Content-Disposition / createSignedUrl(download) への
+  //    ヘッダインジェクションを防止する (クロスレビュー M6)。
+  const rawName = (formData.get("originalFileName") as string) || file.name;
+  const originalFileName =
+    Array.from(rawName)
+      .filter((ch) => {
+        const code = ch.charCodeAt(0);
+        // C0 制御文字 (0x00-0x1F) と DEL (0x7F) を除去
+        return code >= 0x20 && code !== 0x7f;
+      })
+      .join("")
+      .trim()
+      .slice(0, 255) || "uploaded.pdf";
 
   // 対象月の手動指定（PDFの解析結果より優先）
   const overrideReportMonth = (formData.get("overrideReportMonth") as string) || null;
   if (overrideReportMonth && !/^\d{4}-\d{2}-\d{2}$/.test(overrideReportMonth)) {
     throw new Error("対象月の指定が不正です");
   }
-
-  const { data: membership } = await supabase
-    .from("memberships")
-    .select("organization_id")
-    .eq("user_id", user.id)
-    .single();
-
-  if (!membership) throw new Error("組織が見つかりません");
 
   const orgId = membership.organization_id;
   const timestamp = Date.now();

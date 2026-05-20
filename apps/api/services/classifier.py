@@ -4,11 +4,14 @@ Classification and aggregation service.
 ルールベース分類 + 信頼度スコアを各行に付与する。
 信頼度が低い行は AI 分類器（services.ai_classifier）で再分類される想定。
 """
+import logging
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Literal, Optional
 
 from schemas.models import AggregatedProperty
+
+logger = logging.getLogger(__name__)
 
 
 # ----- 定数 -----
@@ -143,6 +146,19 @@ def aggregate_classified_lines(lines: list[dict]) -> list[AggregatedProperty]:
         category = row.get("category", "material")
         abs_amount = abs(amount)
         abs_tax = abs(tax)
+
+        # 符号異常の検知: 期待と逆符号なら誤分類の可能性が高い。
+        # 集計値 (abs/符号補正) は従来どおりだが、黙って潰さず警告として顕在化する。
+        if category == "sales" and amount < 0:
+            logger.warning(
+                "符号異常: sales なのに税抜金額が負 (邸名=%r 工種=%r 金額=%s)",
+                tei, row.get("工種", ""), amount,
+            )
+        elif category in ("shaho", "seisanka", "material") and amount > 0:
+            logger.warning(
+                "符号異常: %s なのに税抜金額が正 (邸名=%r 工種=%r 金額=%s)",
+                category, tei, row.get("工種", ""), amount,
+            )
 
         if category == "sales":
             agg["D_items"].append(amount if amount >= 0 else abs_amount)

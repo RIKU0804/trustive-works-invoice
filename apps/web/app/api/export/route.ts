@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { resolveCaller } from "@/lib/auth/membership";
 import {
   buildLegacyFileName,
   buildLegacyWorkbook,
@@ -72,22 +72,18 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const supabase = createClient();
-
-  const { data: { user }, error: authError } = await supabase.auth.getUser();
-  if (authError || !user) {
+  const caller = await resolveCaller();
+  if (caller.kind === "unauthenticated") {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-
-  const { data: membership } = await supabase
-    .from("memberships")
-    .select("organization_id")
-    .eq("user_id", user.id)
-    .single();
-
-  if (!membership) {
+  if (caller.kind === "no-membership") {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+  if (caller.kind === "error") {
+    return NextResponse.json({ error: "データ取得に失敗しました" }, { status: 500 });
+  }
+
+  const { supabase, membership } = caller.ctx;
 
   const monthStart = `${month}-01`;
 

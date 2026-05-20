@@ -1,14 +1,22 @@
-import { notFound } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { notFound, redirect } from "next/navigation";
+import { resolveCaller } from "@/lib/auth/membership";
 import { AssignTable } from "./AssignTable";
 
 export default async function AssignPage({ params }: { params: { paymentNoticeId: string } }) {
-  const supabase = createClient();
+  // 認証・組織解決を先に行う (旧コードはデータ取得後に認証していた)
+  const caller = await resolveCaller();
+  if (caller.kind === "unauthenticated") redirect("/login");
+  if (caller.kind !== "ok") notFound();
 
+  const { supabase, membership } = caller.ctx;
+  const orgId = membership.organization_id;
+
+  // 通知書は必ず組織でスコープする (IDOR 対策の多層防御)
   const { data: notice } = await supabase
     .from("payment_notices")
     .select("*")
     .eq("id", params.paymentNoticeId)
+    .eq("organization_id", orgId)
     .single();
 
   if (!notice) notFound();
@@ -16,26 +24,16 @@ export default async function AssignPage({ params }: { params: { paymentNoticeId
   const { data: properties } = await supabase
     .from("properties")
     .select("*, staff_members(id, name)")
+    .eq("organization_id", orgId)
     .eq("payment_notice_id", params.paymentNoticeId)
     .order("property_name");
 
-  const { data: { user } } = await supabase.auth.getUser();
-  const { data: membership } = user
-    ? await supabase
-        .from("memberships")
-        .select("organization_id")
-        .eq("user_id", user.id)
-        .single()
-    : { data: null };
-
-  const { data: staffList } = membership
-    ? await supabase
-        .from("staff_members")
-        .select("id, name")
-        .eq("organization_id", membership.organization_id)
-        .eq("is_active", true)
-        .order("display_order")
-    : { data: [] };
+  const { data: staffList } = await supabase
+    .from("staff_members")
+    .select("id, name")
+    .eq("organization_id", orgId)
+    .eq("is_active", true)
+    .order("display_order");
 
   return (
     <div className="space-y-6">

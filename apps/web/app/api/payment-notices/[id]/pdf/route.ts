@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
+import { resolveCaller } from "@/lib/auth/membership";
 
 const STORAGE_BUCKET = "payment-notices";
 const SIGNED_URL_TTL_SECONDS = 60;
@@ -22,33 +23,28 @@ export async function GET(
     return notFound();
   }
 
-  const supabase = createClient();
+  const caller = await resolveCaller();
 
-  const {
-    data: { user },
-    error: userError,
-  } = await supabase.auth.getUser();
-
-  if (userError || !user) {
+  if (caller.kind === "unauthenticated") {
     return NextResponse.json(
       { error: { code: "UNAUTHORIZED", message: "認証が必要です" } },
       { status: 401 },
     );
   }
-
-  const { data: membership } = await supabase
-    .from("memberships")
-    .select("organization_id")
-    .eq("user_id", user.id)
-    .maybeSingle();
-
-  if (!membership) {
+  if (caller.kind === "no-membership") {
     return NextResponse.json(
       { error: { code: "FORBIDDEN", message: "組織が見つかりません" } },
       { status: 403 },
     );
   }
+  if (caller.kind === "error") {
+    return NextResponse.json(
+      { error: { code: "INTERNAL", message: "メンバーシップの取得に失敗しました" } },
+      { status: 500 },
+    );
+  }
 
+  const { membership } = caller.ctx;
   const serviceClient = createServiceClient();
 
   const { data: notice, error: noticeError } = await serviceClient

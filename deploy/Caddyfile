@@ -69,10 +69,15 @@
 }
 
 # ─── Supabase Studio (admin) ────────────────────────────────────────────────
-# Studio is exposed via the same kong gateway: kong's catch-all `/` route maps
-# to the studio container, with HTTP basic-auth protecting it.
+# Studio は全DBスキーマ操作が可能な管理画面。basic-auth だけでインターネット
+# 全体に晒すのは危険なため、既定では IP 許可リスト (プライベート網のみ) で
+# アクセスを絞る。公開アクセスが必要なら .env の STUDIO_ALLOWED_IPS を
+# 明示設定すること (例: 自社 VPN/bastion の固定IP)。
 {$STUDIO_DOMAIN} {
 	encode zstd gzip
+
+	@blocked not remote_ip {$STUDIO_ALLOWED_IPS:127.0.0.1/32 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16}
+	respond @blocked "Forbidden" 403
 
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"

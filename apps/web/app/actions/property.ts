@@ -2,7 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
+import { getCallerContext } from "@/lib/auth/membership";
 import { logAction } from "@/lib/audit";
 import type { Database } from "@/lib/supabase/types";
 
@@ -44,21 +45,8 @@ export async function updateProperty(input: UpdatePropertyInput): Promise<void> 
   const parsed = updatePropertySchema.parse(input);
   const { propertyId, ...updates } = parsed;
 
-  const supabase = createClient();
+  const { user, membership } = await getCallerContext();
   const serviceClient = createServiceClient();
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error("認証されていません");
-
-  const { data: membership } = await supabase
-    .from("memberships")
-    .select("organization_id")
-    .eq("user_id", user.id)
-    .single();
-
-  if (!membership) throw new Error("組織が見つかりません");
 
   // 対象物件の組織所属確認（クロスオーグ修正の防止）
   const { data: existing, error: fetchError } = await serviceClient

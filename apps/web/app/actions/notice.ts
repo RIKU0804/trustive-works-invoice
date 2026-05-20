@@ -1,14 +1,16 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
+import { requireOrgAdmin } from "@/lib/auth/membership";
 import { logAction } from "@/lib/audit";
 
 /**
  * payment_notices を削除する。
  *
  * 動作:
- *  1. ログインユーザの membership.organization_id を確認
+ *  1. 呼び出し元が owner/admin であることを確認 (削除は service client 経由で
+ *     RLS をバイパスするため、RLS の「admin のみ削除可」を明示的に再現する)
  *  2. 同一 org のものか検証（クロスオーグ攻撃対策）
  *  3. Storage 上の PDF を削除
  *  4. payment_notices を削除（properties / property_lines は ON DELETE CASCADE）
@@ -22,21 +24,8 @@ import { logAction } from "@/lib/audit";
 export async function deletePaymentNotice(noticeId: string): Promise<void> {
   if (!noticeId) throw new Error("通知書IDが指定されていません");
 
-  const supabase = createClient();
+  const { user, membership } = await requireOrgAdmin();
   const serviceClient = createServiceClient();
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) redirect("/login");
-
-  const { data: membership } = await supabase
-    .from("memberships")
-    .select("organization_id")
-    .eq("user_id", user.id)
-    .single();
-
-  if (!membership) throw new Error("組織が見つかりません");
 
   const orgId = membership.organization_id;
 

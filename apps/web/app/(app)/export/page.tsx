@@ -1,28 +1,20 @@
-import { createClient } from "@/lib/supabase/server";
+import { redirect } from "next/navigation";
+import { resolveCaller } from "@/lib/auth/membership";
 import { ExportForm } from "./ExportForm";
 
 export default async function ExportPage() {
-  const supabase = createClient();
+  const caller = await resolveCaller();
+  if (caller.kind === "unauthenticated") redirect("/login");
+  if (caller.kind !== "ok") return null;
 
-  const { data: { user } } = await supabase.auth.getUser();
-  const { data: membership } = user
-    ? await supabase
-        .from("memberships")
-        .select("organization_id")
-        .eq("user_id", user.id)
-        .single()
-    : { data: null };
+  const { supabase, membership } = caller.ctx;
 
-  const orgId = membership?.organization_id;
-
-  const { data: notices } = orgId
-    ? await supabase
-        .from("payment_notices")
-        .select("report_month")
-        .eq("organization_id", orgId)
-        .eq("parse_status", "completed")
-        .order("report_month", { ascending: false })
-    : { data: [] };
+  const { data: notices } = await supabase
+    .from("payment_notices")
+    .select("report_month")
+    .eq("organization_id", membership.organization_id)
+    .eq("parse_status", "completed")
+    .order("report_month", { ascending: false });
 
   const months = Array.from(
     new Set((notices ?? []).map((n) => n.report_month).filter(Boolean))

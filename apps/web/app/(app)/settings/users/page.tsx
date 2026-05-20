@@ -1,4 +1,4 @@
-import { createClient } from "@/lib/supabase/server";
+import { resolveCaller } from "@/lib/auth/membership";
 import { UsersTable } from "./UsersTable";
 import { InviteForm } from "./InviteForm";
 
@@ -14,14 +14,9 @@ interface MemberRow {
 }
 
 export default async function UsersSettingsPage() {
-  const supabase = createClient();
+  const caller = await resolveCaller();
 
-  const {
-    data: { user },
-    error: authError,
-  } = await supabase.auth.getUser();
-
-  if (authError || !user) {
+  if (caller.kind === "unauthenticated") {
     return (
       <div className="space-y-6 max-w-3xl">
         <h1 className="text-xl font-semibold">ユーザー管理</h1>
@@ -30,13 +25,7 @@ export default async function UsersSettingsPage() {
     );
   }
 
-  const { data: currentMembership, error: membershipError } = await supabase
-    .from("memberships")
-    .select("organization_id, role")
-    .eq("user_id", user.id)
-    .single();
-
-  if (membershipError || !currentMembership) {
+  if (caller.kind === "no-membership") {
     return (
       <div className="space-y-6 max-w-3xl">
         <h1 className="text-xl font-semibold">ユーザー管理</h1>
@@ -47,7 +36,20 @@ export default async function UsersSettingsPage() {
     );
   }
 
-  const { organization_id: orgId, role: currentUserRole } = currentMembership;
+  if (caller.kind === "error") {
+    return (
+      <div className="space-y-6 max-w-3xl">
+        <h1 className="text-xl font-semibold">ユーザー管理</h1>
+        <p className="text-sm text-destructive">
+          メンバーシップの取得に失敗しました
+        </p>
+      </div>
+    );
+  }
+
+  const { supabase, user, membership } = caller.ctx;
+  const orgId = membership.organization_id;
+  const currentUserRole = membership.role;
 
   const { data: memberships, error: membershipsError } = await supabase
     .from("memberships")

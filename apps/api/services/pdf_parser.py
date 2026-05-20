@@ -7,6 +7,9 @@ v1.2.4 features:
 - 邸名 carry-forward for continuation rows (PDFs that omit 邸名 on subsequent rows)
 - ＜工事代 計＞ extraction from page text (税抜 + 税込)
 - ＜相殺 計＞ 2-column format support (税抜=税込, 消費税列省略)
+
+注: 抽出関数は「すでに開いた pdfplumber.PDF」を受け取る。
+PDF を1回だけ開いて使い回すことでパースコスト/リソース圧を 1/3 にする。
 """
 import logging
 import re
@@ -45,28 +48,32 @@ _DEFAULT_COL_MAP: dict[str, int] = {
 _REQUIRED_HEADER_COLS = {"邸名", "工種", "税抜金額", "税込金額"}
 
 
-def extract_payment_date(pdf_path: str) -> Optional[str]:
-    """Extract 支払日 from PDF in YYYY年MM月DD日 format."""
+def extract_payment_date(pdf: pdfplumber.PDF) -> Optional[str]:
+    """Extract 支払日 from PDF in YYYY年MM月DD日 format.
+
+    ベストエフォート: 失敗しても None を返す (支払日は補助情報のため)。
+    """
     try:
-        with pdfplumber.open(pdf_path) as pdf:
-            for page in pdf.pages:
-                text = page.extract_text() or ""
-                # Strict pattern: 支払日 prefix
-                m = re.search(r'支払日\s*(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日', text)
-                if m:
-                    return f"{m.group(1)}年{m.group(2).zfill(2)}月{m.group(3).zfill(2)}日"
-                # Fallback: garbled CJK encoding within first 500 chars
-                head = text[:500]
-                m2 = re.search(r'(20\d{2})\D{1,3}(\d{1,2})\D{1,3}(\d{1,2})', head)
-                if m2:
-                    return f"{m2.group(1)}年{m2.group(2).zfill(2)}月{m2.group(3).zfill(2)}日"
-    except Exception as e:
-        logger.warning("extract_payment_date error: %s", e)
+        for page in pdf.pages:
+            text = page.extract_text() or ""
+            # Strict pattern: 支払日 prefix
+            m = re.search(r'支払日\s*(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日', text)
+            if m:
+                return f"{m.group(1)}年{m.group(2).zfill(2)}月{m.group(3).zfill(2)}日"
+            # Fallback: garbled CJK encoding within first 500 chars
+            head = text[:500]
+            m2 = re.search(r'(20\d{2})\D{1,3}(\d{1,2})\D{1,3}(\d{1,2})', head)
+            if m2:
+                return f"{m2.group(1)}年{m2.group(2).zfill(2)}月{m2.group(3).zfill(2)}日"
+    except Exception:
+        logger.exception("extract_payment_date failed")
     return None
 
 
-def extract_totals(pdf_path: str) -> dict:
+def extract_totals(pdf: pdfplumber.PDF) -> dict:
     """Extract transfer amount and offset total from PDF.
+
+    ベストエフォート: 失敗しても既定 dict を返す (照合用の補助情報のため)。
 
     Returns:
         {
@@ -83,93 +90,95 @@ def extract_totals(pdf_path: str) -> dict:
         "pdf_koujidai_zeikomi": None,
     }
     try:
-        with pdfplumber.open(pdf_path) as pdf:
-            target_page = None
-            for page in pdf.pages:
-                text = page.extract_text() or ""
-                if ("合計" in text) and ("相殺" in text or "工事代" in text):
-                    target_page = page
+        target_page = None
+        for page in pdf.pages:
+            text = page.extract_text() or ""
+            if ("合計" in text) and ("相殺" in text or "工事代" in text):
+                target_page = page
 
-                # ＜工事代 計＞ extraction can occur on any page
-                m_koujidai = re.search(
-                    r'＜工事代\s*計＞\s*([\d,]+)\s+([\d,]+)\s+([\d,]+)', text
-                )
-                if m_koujidai and result["pdf_koujidai_zeinuki"] is None:
-                    result["pdf_koujidai_zeinuki"] = int(m_koujidai.group(1).replace(",", ""))
-                    result["pdf_koujidai_zeikomi"] = int(m_koujidai.group(3).replace(",", ""))
-
-            if target_page is None:
-                return result
-
-            text = target_page.extract_text() or ""
-            all_goukei = re.findall(r'合計\s+([\d,]+)\s+([\d,]+)\s+([\d,]+)', text)
-            if all_goukei:
-                result["furikomi"] = int(all_goukei[-1][2].replace(",", ""))
-
-            # ＜相殺 計＞: 2 formats supported
-            #   3-col: ＜相殺 計＞ -15,000 0 -15,000  (税抜 消費税 税込)
-            #   2-col: ＜相殺 計＞ -718,450 -718,450 (税抜=税込, 消費税列省略)
-            # Take the LAST number as 税込.
-            m_sousai = re.search(
-                r'＜相殺\s*計＞\s*([▲▽\-−]?[\d,]+)(?:\s+([▲▽\-−]?[\d,]+))?(?:\s+([▲▽\-−]?[\d,]+))?',
-                text,
+            # ＜工事代 計＞ extraction can occur on any page
+            m_koujidai = re.search(
+                r'＜工事代\s*計＞\s*([\d,]+)\s+([\d,]+)\s+([\d,]+)', text
             )
-            if m_sousai:
-                nums = [g for g in m_sousai.groups() if g]
-                if nums:
-                    result["sousai"] = _to_int_amount(nums[-1])
-    except Exception as e:
-        logger.warning("extract_totals error: %s", e)
+            if m_koujidai and result["pdf_koujidai_zeinuki"] is None:
+                result["pdf_koujidai_zeinuki"] = int(m_koujidai.group(1).replace(",", ""))
+                result["pdf_koujidai_zeikomi"] = int(m_koujidai.group(3).replace(",", ""))
+
+        if target_page is None:
+            return result
+
+        text = target_page.extract_text() or ""
+        all_goukei = re.findall(r'合計\s+([\d,]+)\s+([\d,]+)\s+([\d,]+)', text)
+        if all_goukei:
+            result["furikomi"] = int(all_goukei[-1][2].replace(",", ""))
+
+        # ＜相殺 計＞: 2 formats supported
+        #   3-col: ＜相殺 計＞ -15,000 0 -15,000  (税抜 消費税 税込)
+        #   2-col: ＜相殺 計＞ -718,450 -718,450 (税抜=税込, 消費税列省略)
+        # Take the LAST number as 税込.
+        m_sousai = re.search(
+            r'＜相殺\s*計＞\s*([▲▽\-−]?[\d,]+)(?:\s+([▲▽\-−]?[\d,]+))?(?:\s+([▲▽\-−]?[\d,]+))?',
+            text,
+        )
+        if m_sousai:
+            nums = [g for g in m_sousai.groups() if g]
+            if nums:
+                result["sousai"] = _to_int_amount(nums[-1])
+    except Exception:
+        logger.exception("extract_totals failed")
     return result
 
 
-def extract_rows(pdf_path: str) -> Optional[list[dict]]:
+def extract_rows(pdf: pdfplumber.PDF) -> Optional[list[dict]]:
     """Extract detail rows from PDF.
 
     Returns list of row dicts with keys:
       事業所, 契約NO, 邸名, 工種, 税抜金額, 消費税, 税込金額, 備考
-    or None if extraction failed (e.g., image PDF).
+    or None if the PDF has no extractable text (e.g., image/scanned PDF).
+
+    重要: 「テキストが取れない (画像PDF)」場合のみ None を返す。
+    パーサ自体が想定外の例外で落ちた場合は握りつぶさず再送出し、
+    呼び出し側が 500 として扱えるようにする (データ欠損の隠蔽防止)。
     """
     try:
         all_rows: list[dict] = []
 
-        with pdfplumber.open(pdf_path) as pdf:
-            any_text_page = False
-            for page_num, page in enumerate(pdf.pages, start=1):
-                text = page.extract_text() or ""
-                if len(text.strip()) < 50:
-                    continue
-                any_text_page = True
+        any_text_page = False
+        for page in pdf.pages:
+            text = page.extract_text() or ""
+            if len(text.strip()) < 50:
+                continue
+            any_text_page = True
 
-                tables = page.extract_tables()
-                for table in tables:
-                    if not table:
+            tables = page.extract_tables()
+            for table in tables:
+                if not table:
+                    continue
+
+                active_col_map: dict[str, int] = _DEFAULT_COL_MAP
+                start_idx = 0
+                detected = _detect_column_map(table[0])
+                if detected is not None:
+                    active_col_map = detected
+                    start_idx = 1  # skip header row
+
+                max_idx = max(active_col_map.values())
+                for row in table[start_idx:]:
+                    if not row:
+                        continue
+                    if len(row) <= max_idx:
+                        logger.debug(
+                            "skip insufficient columns: expected>=%d actual=%d",
+                            max_idx + 1, len(row),
+                        )
                         continue
 
-                    active_col_map: dict[str, int] = _DEFAULT_COL_MAP
-                    start_idx = 0
-                    detected = _detect_column_map(table[0])
-                    if detected is not None:
-                        active_col_map = detected
-                        start_idx = 1  # skip header row
+                    parsed = _parse_row_mapped(row, active_col_map)
+                    if parsed:
+                        all_rows.append(parsed)
 
-                    max_idx = max(active_col_map.values())
-                    for row in table[start_idx:]:
-                        if not row:
-                            continue
-                        if len(row) <= max_idx:
-                            logger.debug(
-                                "skip insufficient columns: expected>=%d actual=%d",
-                                max_idx + 1, len(row),
-                            )
-                            continue
-
-                        parsed = _parse_row_mapped(row, active_col_map)
-                        if parsed:
-                            all_rows.append(parsed)
-
-            if not any_text_page:
-                return None
+        if not any_text_page:
+            return None
 
         if not all_rows:
             return None
@@ -177,20 +186,35 @@ def extract_rows(pdf_path: str) -> Optional[list[dict]]:
         # 邸名 carry-forward:
         # PDFs sometimes only write 邸名 on the first row of a property's group.
         # pdfplumber returns empty 邸名 for subsequent rows. Propagate the last
-        # valid 邸名 for non-summary rows (those with 工種 not starting with ＜).
+        # valid 邸名 only when the continuation row plausibly belongs to the same
+        # group: its 工種 must not be a summary (＜…＞) row, and its 契約NO must
+        # be empty or match the last valid row's 契約NO (別契約への誤帰属を防止)。
         last_valid_tei = ""
+        last_valid_contract = ""
         for row in all_rows:
             tei = row["邸名"]
             if tei:
                 last_valid_tei = tei
-            elif last_valid_tei and row["工種"] and not row["工種"].startswith("＜"):
-                row["邸名"] = last_valid_tei
+                last_valid_contract = row.get("契約NO", "")
+                continue
+            if not (last_valid_tei and row["工種"] and not row["工種"].startswith("＜")):
+                continue
+            row_contract = row.get("契約NO", "")
+            if row_contract and row_contract != last_valid_contract:
+                # 契約NO が変わっている → 別グループの可能性が高いので引き継がない
+                logger.warning(
+                    "邸名 carry-forward skipped: contract changed (%r != %r)",
+                    row_contract, last_valid_contract,
+                )
+                continue
+            row["邸名"] = last_valid_tei
 
         return all_rows
 
-    except Exception as e:
-        logger.warning("extract_rows error: %s", e)
-        return None
+    except Exception:
+        # 想定外のパース失敗は握りつぶさない (画像PDFの 422 と区別する)
+        logger.exception("extract_rows crashed unexpectedly")
+        raise
 
 
 def _detect_column_map(row: list) -> Optional[dict[str, int]]:
@@ -249,13 +273,23 @@ def _parse_row_mapped(row: list, col_map: dict[str, int]) -> Optional[dict]:
 
 
 def _parse_amount(s: object) -> Optional[int]:
-    """Parse a Japanese amount string (with ▲, -, − as negative prefix)."""
+    """Parse a Japanese amount string.
+
+    負数表現に対応:
+      - 先頭の ▲ / - / − / ▽
+      - 会計式の括弧囲み  (1,000) / （1,000）
+      - 末尾マイナス       1,000-
+    """
     if s is None:
         return None
     s = str(s).strip()
     if not s:
         return None
-    is_negative = s.startswith("▲") or s.startswith("-") or s.startswith("−")
+    is_negative = (
+        s.startswith(("▲", "-", "−", "▽"))
+        or s.endswith("-")
+        or ((s.startswith("(") or s.startswith("（")) and (s.endswith(")") or s.endswith("）")))
+    )
     clean = re.sub(r"[^\d]", "", s)
     if not clean:
         return None

@@ -1,4 +1,6 @@
+import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { resolveCaller } from "@/lib/auth/membership";
 import Link from "next/link";
 import { Inbox, Upload } from "lucide-react";
 import { SearchButton } from "./SearchButton";
@@ -104,34 +106,24 @@ async function computeKpis(
 }
 
 export default async function DashboardPage() {
-  const supabase = createClient();
+  const caller = await resolveCaller();
+  if (caller.kind === "unauthenticated") redirect("/login");
+  // 「組織なし / 取得失敗」はレイアウトが明示メッセージを表示する
+  if (caller.kind !== "ok") return null;
 
-  const { data: { user } } = await supabase.auth.getUser();
+  const { supabase, membership } = caller.ctx;
+  const orgId = membership.organization_id;
 
-  const { data: membership } = user
-    ? await supabase
-        .from("memberships")
-        .select("organization_id")
-        .eq("user_id", user.id)
-        .single()
-    : { data: null };
-
-  const orgId = membership?.organization_id;
-
-  const { data: notices } = orgId
-    ? await supabase
-        .from("payment_notices")
-        .select("*")
-        .eq("organization_id", orgId)
-        .order("report_month", { ascending: false })
-        .order("uploaded_at", { ascending: false })
-        .limit(50)
-    : { data: [] };
+  const { data: notices } = await supabase
+    .from("payment_notices")
+    .select("*")
+    .eq("organization_id", orgId)
+    .order("report_month", { ascending: false })
+    .order("uploaded_at", { ascending: false })
+    .limit(50);
 
   // KPI: 最新月 / 前月 / 前年同月 のサマリ
-  const kpis = orgId
-    ? await computeKpis(supabase, orgId, notices ?? [])
-    : null;
+  const kpis = await computeKpis(supabase, orgId, notices ?? []);
 
   const statusLabel: Record<string, string> = {
     pending: "待機中",

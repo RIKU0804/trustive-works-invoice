@@ -1,6 +1,7 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { Inbox, Upload } from "lucide-react";
-import { createClient } from "@/lib/supabase/server";
+import { resolveCaller } from "@/lib/auth/membership";
 import MonthSelect from "./MonthSelect";
 import { PropertiesFilters, type PropertyFilterRow } from "./PropertiesFilters";
 
@@ -9,26 +10,18 @@ type Props = {
 };
 
 export default async function PropertiesPage({ searchParams }: Props) {
-  const supabase = createClient();
+  const caller = await resolveCaller();
+  if (caller.kind === "unauthenticated") redirect("/login");
+  if (caller.kind !== "ok") return null;
 
-  const { data: { user } } = await supabase.auth.getUser();
-  const { data: membership } = user
-    ? await supabase
-        .from("memberships")
-        .select("organization_id")
-        .eq("user_id", user.id)
-        .single()
-    : { data: null };
+  const { supabase, membership } = caller.ctx;
+  const orgId = membership.organization_id;
 
-  const orgId = membership?.organization_id;
-
-  const { data: months } = orgId
-    ? await supabase
-        .from("payment_notices")
-        .select("report_month")
-        .eq("organization_id", orgId)
-        .order("report_month", { ascending: false })
-    : { data: [] };
+  const { data: months } = await supabase
+    .from("payment_notices")
+    .select("report_month")
+    .eq("organization_id", orgId)
+    .order("report_month", { ascending: false });
 
   const uniqueMonths = Array.from(
     new Set((months ?? []).map((m) => m.report_month).filter(Boolean))
