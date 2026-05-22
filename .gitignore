@@ -32,3 +32,6 @@ apps/web/out/
 # Deploy secrets
 deploy/.env
 deploy/data/
+
+# TypeScript incremental build cache
+*.tsbuildinfo
