@@ -2,11 +2,18 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { requireOrgAdmin } from "@/lib/auth/membership";
+import { requireOrgAdmin, type CallerRole } from "@/lib/auth/membership";
 import { logAction } from "@/lib/audit";
+import { userFacingError } from "@/lib/api-errors";
 
-type MemberRole = "owner" | "admin" | "member";
+// HIGH H4: CallerRole を一元化し、ローカル別名の MemberRole を排除。
+type MemberRole = CallerRole;
 type InvitableRole = Exclude<MemberRole, "owner">;
+
+const VALID_MEMBER_ROLES: readonly MemberRole[] = ["owner", "admin", "member"];
+function isMemberRole(s: string): s is MemberRole {
+  return (VALID_MEMBER_ROLES as readonly string[]).includes(s);
+}
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -38,7 +45,11 @@ export async function updateMemberRole(
     throw new Error("ownerへの変更は現在のownerのみが行えます");
   }
 
-  const previousRole = target.role as MemberRole;
+  // HIGH H4: 文字列を unsafe cast せず型ガードで検証する。
+  if (!isMemberRole(target.role)) {
+    throw new Error(`invalid role in DB: ${target.role}`);
+  }
+  const previousRole: MemberRole = target.role;
 
   const { error } = await supabase
     .from("memberships")
@@ -47,8 +58,10 @@ export async function updateMemberRole(
     .eq("organization_id", membership.organization_id);
 
   if (error) {
-    console.error("[updateMemberRole] update failed:", error.message);
-    throw new Error("役割の更新に失敗しました");
+    throw userFacingError(
+      `[updateMemberRole] ${error.message}`,
+      "役割の更新に失敗しました"
+    );
   }
 
   await logAction(
@@ -81,8 +94,10 @@ export async function removeMember(membershipId: string): Promise<void> {
     .eq("organization_id", membership.organization_id);
 
   if (error) {
-    console.error("[removeMember] delete failed:", error.message);
-    throw new Error("メンバーの削除に失敗しました");
+    throw userFacingError(
+      `[removeMember] ${error.message}`,
+      "メンバーの削除に失敗しました"
+    );
   }
 
   await logAction(
@@ -125,8 +140,10 @@ export async function inviteMember(
     .maybeSingle();
 
   if (existingUserError) {
-    console.error("[inviteMember] user lookup failed:", existingUserError.message);
-    throw new Error("招待処理中にエラーが発生しました");
+    throw userFacingError(
+      `[inviteMember] user lookup failed: ${existingUserError.message}`,
+      "招待処理中にエラーが発生しました"
+    );
   }
 
   let invitedUserId: string;
@@ -142,8 +159,10 @@ export async function inviteMember(
       .maybeSingle();
 
     if (existingMembershipError) {
-      console.error("[inviteMember] membership check failed:", existingMembershipError.message);
-      throw new Error("招待処理中にエラーが発生しました");
+      throw userFacingError(
+        `[inviteMember] membership check failed: ${existingMembershipError.message}`,
+        "招待処理中にエラーが発生しました"
+      );
     }
     if (existingMembership) {
       throw new Error("このユーザーは既にこの組織のメンバーです");
@@ -166,8 +185,10 @@ export async function inviteMember(
       );
 
     if (inviteError || !inviteData?.user) {
-      const message = inviteError?.message ?? "招待に失敗しました";
-      throw new Error(`招待に失敗しました: ${message}`);
+      throw userFacingError(
+        `[inviteMember] auth invite failed: ${inviteError?.message ?? "no user returned"}`,
+        "招待に失敗しました。しばらく待ってから再度お試しください。"
+      );
     }
 
     invitedUserId = inviteData.user.id;
@@ -190,8 +211,10 @@ export async function inviteMember(
     );
 
   if (membershipInsertError) {
-    console.error("[inviteMember] membership insert failed:", membershipInsertError.message);
-    throw new Error("招待処理中にエラーが発生しました");
+    throw userFacingError(
+      `[inviteMember] membership insert failed: ${membershipInsertError.message}`,
+      "招待処理中にエラーが発生しました"
+    );
   }
 
   await logAction(

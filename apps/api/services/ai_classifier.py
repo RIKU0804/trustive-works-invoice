@@ -4,17 +4,23 @@ AI classifier — 低信頼度行を LLM で再分類する。
 コスト最適化方針:
   - 既定では無効 (settings.ai_enabled=False)。AI 課金ゼロでルールベースのみ動作。
   - 有効時も「1 PDF = 1 バッチ呼び出し」。低信頼度行を 1 リクエストにまとめる。
-  - 同一 (工種, 備考, 符号) は重複排除し、ユニーク項目だけ問い合わせる。
-  - プロセス内キャッシュで、過去に判定済みの (工種, 備考, 符号) は再問合せしない
+  - 同一 (org, 工種, 備考, 符号) は重複排除し、ユニーク項目だけ問い合わせる。
+  - プロセス内キャッシュで、過去に判定済みの (org, 工種, 備考, 符号) は再問合せしない
     (請求書の明細は月次で繰り返すためヒット率が高い)。
   - APIキー未設定 / 無効 / エラー時は no-op (ルール結果のまま)。
+
+スレッド安全性:
+  - FastAPI は同期エンドポイントを threadpool で並列実行するため、
+    プロセス内キャッシュ (_AI_CACHE) は Lock で守る。
 """
 from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
+from threading import RLock
 from typing import Optional
 
 import httpx
@@ -27,7 +33,9 @@ logger = logging.getLogger(__name__)
 # ----- 設定 -----
 LOW_CONFIDENCE_THRESHOLD = 0.7
 MAX_BIKOU_LEN = 500  # プロンプトインジェクション対策
-HTTP_TIMEOUT = 60.0
+# httpx の Timeout は接続/読み/書き/プールを個別に設定する。
+# read は LLM 応答待ちなので長めに、connect / write / pool はサーバ詰まり検知のため短く。
+_HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=5.0)
 # コスト/暴走対策: 1リクエストで AI に回す低信頼度行の上限。超過分はルール結果のまま。
 MAX_AI_ROWS = 200
 # 出力トークン上限の動的算出 (項目数に比例)
@@ -36,6 +44,9 @@ TOKENS_BASE = 96
 MAX_TOKENS_CAP = 2048
 # プロセス内キャッシュの最大エントリ数 (超過したらクリアして作り直す簡易方式)
 CACHE_MAX_ENTRIES = 5000
+# transient な HTTP エラーの再試行設定
+_RETRY_STATUS_CODES = {429, 502, 503, 504}
+_RETRY_BACKOFF_SEC = 2.0
 
 VALID_CATEGORIES = {"sales", "shaho", "seisanka", "material"}
 
@@ -115,22 +126,31 @@ def _resolve_provider(model_override: Optional[str]) -> Optional[_ProviderConfig
 
 
 # ----- プロセス内キャッシュ -----
-# key: (model, work_type, note, sign) -> {"category","confidence","reasoning"}
+# key: (org_id, model, work_type, note, sign) -> {"category","confidence","reasoning"}
+# 注: org_id を含めることでテナント間のキャッシュ漏れを防止
 _AI_CACHE: dict[tuple, dict] = {}
+_AI_CACHE_LOCK = RLock()
 
 
 def reset_cache() -> None:
     """テスト用: プロセスキャッシュをクリア。"""
-    _AI_CACHE.clear()
+    with _AI_CACHE_LOCK:
+        _AI_CACHE.clear()
+
+
+def _cache_get(key: tuple) -> Optional[dict]:
+    with _AI_CACHE_LOCK:
+        return _AI_CACHE.get(key)
 
 
 def _cache_put(key: tuple, value: dict) -> None:
-    if len(_AI_CACHE) >= CACHE_MAX_ENTRIES:
-        _AI_CACHE.clear()
-    _AI_CACHE[key] = value
+    with _AI_CACHE_LOCK:
+        if len(_AI_CACHE) >= CACHE_MAX_ENTRIES:
+            _AI_CACHE.clear()
+        _AI_CACHE[key] = value
 
 
-def _row_key(model: str, row: dict) -> tuple:
+def _row_key(org_id: str, model: str, row: dict) -> tuple:
     work_type = str(row.get("工種", ""))[:200]
     note = str(row.get("備考", ""))[:MAX_BIKOU_LEN]
     try:
@@ -138,19 +158,26 @@ def _row_key(model: str, row: dict) -> tuple:
     except (TypeError, ValueError):
         amount = 0.0
     sign = "neg" if amount < 0 else "pos"
-    return (model, work_type, note, sign)
+    return (org_id, model, work_type, note, sign)
 
 
 # ----- 公開 API -----
 def classify_low_confidence_rows(
     rows: list[dict],
     *,
+    org_id: str = "",
     model: Optional[str] = None,
     threshold: float = LOW_CONFIDENCE_THRESHOLD,
 ) -> tuple[list[dict], list[AIClassificationRecord]]:
     """信頼度が低い行を AI でまとめて再分類し、(updated_rows, ai_records) を返す。
 
     AI 無効 / キー未設定 / エラー時は元の rows をそのまま返す (no-op)。
+
+    Args:
+        rows: 分類対象の行 (各 dict は classification_confidence を含む)
+        org_id: テナント ID。キャッシュキーに含めてテナント間漏れを防ぐ。
+        model: モデル上書き (テスト用)
+        threshold: この値未満を「低信頼度」とみなして AI に回す
     """
     provider = _resolve_provider(model)
     if provider is None:
@@ -180,14 +207,14 @@ def classify_low_confidence_rows(
     # 1) ユニークキーごとにまとめる (重複排除)
     key_to_indices: dict[tuple, list[int]] = {}
     for i in low_idxs:
-        key = _row_key(provider.model, rows[i])
+        key = _row_key(org_id, provider.model, rows[i])
         key_to_indices.setdefault(key, []).append(i)
 
     # 2) キャッシュ参照。未解決のユニークキーだけ LLM へ
     resolved: dict[tuple, dict] = {}
     pending_keys: list[tuple] = []
     for key in key_to_indices:
-        cached = _AI_CACHE.get(key)
+        cached = _cache_get(key)
         if cached is not None:
             resolved[key] = cached
         else:
@@ -274,7 +301,7 @@ def _classify_batch(
     summary_prompt = {"batch_items": len(items)}
     started = time.time()
     try:
-        with httpx.Client(timeout=HTTP_TIMEOUT) as http:
+        with httpx.Client(timeout=_HTTP_TIMEOUT) as http:
             if provider.name == "openrouter":
                 text, in_tok, out_tok = _call_openrouter(
                     http, provider, user_message, max_tokens)
@@ -301,7 +328,8 @@ def _classify_batch(
 
     except Exception as exc:
         latency_ms = int((time.time() - started) * 1000)
-        logger.warning("[ai_classifier] バッチ分類失敗 err=%s", exc)
+        # logger.exception でスタックトレースも残し診断性を高める
+        logger.exception("[ai_classifier] バッチ分類失敗 err=%s", exc)
         record = AIClassificationRecord(
             line_index=-1,
             prompt_input=summary_prompt,
@@ -313,6 +341,36 @@ def _classify_batch(
             error=str(exc),
         )
         return {}, record
+
+
+def _post_with_retry(
+    http: httpx.Client,
+    url: str,
+    *,
+    json_payload: dict,
+    headers: dict,
+) -> httpx.Response:
+    """POST with single retry on transient (429/5xx) errors.
+
+    4xx (429 以外) は永続的なエラー (認証/形式不正) なので再試行しない。
+    """
+    attempt = 0
+    while True:
+        attempt += 1
+        res = http.post(url, json=json_payload, headers=headers)
+        # 成功 or 永続エラーはそのまま (raise_for_status は呼び出し側で扱う)
+        if res.status_code < 400 or res.status_code not in _RETRY_STATUS_CODES:
+            res.raise_for_status()
+            return res
+        # transient: 1回だけ再試行
+        if attempt >= 2:
+            res.raise_for_status()
+            return res
+        logger.warning(
+            "[ai_classifier] transient HTTP %d on %s — retry in %.1fs",
+            res.status_code, url, _RETRY_BACKOFF_SEC,
+        )
+        time.sleep(_RETRY_BACKOFF_SEC)
 
 
 def _call_openrouter(
@@ -336,8 +394,12 @@ def _call_openrouter(
             {"role": "user", "content": user_message},
         ],
     }
-    res = http.post(f"{OPENROUTER_BASE_URL}/chat/completions", json=payload, headers=headers)
-    res.raise_for_status()
+    res = _post_with_retry(
+        http,
+        f"{OPENROUTER_BASE_URL}/chat/completions",
+        json_payload=payload,
+        headers=headers,
+    )
     data = res.json()
     text = data["choices"][0]["message"]["content"] or ""
     usage = data.get("usage") or {}
@@ -362,8 +424,12 @@ def _call_anthropic(
         "system": SYSTEM_PROMPT,
         "messages": [{"role": "user", "content": user_message}],
     }
-    res = http.post(f"{ANTHROPIC_BASE_URL}/messages", json=payload, headers=headers)
-    res.raise_for_status()
+    res = _post_with_retry(
+        http,
+        f"{ANTHROPIC_BASE_URL}/messages",
+        json_payload=payload,
+        headers=headers,
+    )
     data = res.json()
     text = ""
     for block in data.get("content", []):
@@ -390,15 +456,26 @@ def _coerce_one(obj: dict) -> Optional[dict]:
     return {"category": category, "confidence": confidence, "reasoning": reasoning}
 
 
+def _strip_code_fences(text: str) -> str:
+    """Markdown コードフェンスを除去 (```json...``` / ```...``` 両対応)。
+
+    LLM はしばしば結果を ```json ... ``` で囲むので、その正確な剥がし方を行う。
+    """
+    text = text.strip()
+    if not text.startswith("```"):
+        return text
+    # 先頭の ```lang? 行を除去 (lang 部はオプション)
+    text = re.sub(r'^```[\w-]*\s*\n?', '', text, count=1)
+    # 末尾の ``` (末尾空白許容) を除去
+    text = re.sub(r'\n?\s*```\s*$', '', text, count=1)
+    return text.strip()
+
+
 def _parse_batch_response(text: str) -> Optional[dict[int, dict]]:
     """AI バッチ応答 (JSON 配列) をパース・検証して {i: result} を返す。"""
     if not text:
         return None
-    text = text.strip()
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text.lower().startswith("json"):
-            text = text[4:].strip()
+    text = _strip_code_fences(text)
 
     data = None
     try:

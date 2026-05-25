@@ -1,13 +1,27 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { z } from "zod";
 import { requireOrgAdmin, getCallerContext } from "@/lib/auth/membership";
 import { logAction } from "@/lib/audit";
+import { userFacingError } from "@/lib/api-errors";
+
+const staffNameSchema = z
+  .string()
+  .trim()
+  .min(1, "名前を入力してください")
+  .max(80, "名前は80文字までです");
 
 export async function addStaffMember(formData: FormData) {
-  const name = formData.get("name") as string;
-
-  if (!name?.trim()) throw new Error("名前を入力してください");
+  // HIGH: as string キャストの排除。
+  const nameRaw = formData.get("name");
+  const parsed = staffNameSchema.safeParse(
+    typeof nameRaw === "string" ? nameRaw : ""
+  );
+  if (!parsed.success) {
+    throw new Error(parsed.error.issues[0]?.message ?? "入力が不正です");
+  }
+  const trimmedName = parsed.data;
 
   const { supabase, user, membership } = await requireOrgAdmin();
   const orgId = membership.organization_id;
@@ -21,7 +35,6 @@ export async function addStaffMember(formData: FormData) {
     .maybeSingle();
 
   const displayOrder = (max?.display_order ?? 0) + 1;
-  const trimmedName = name.trim();
 
   const { data: inserted, error } = await supabase
     .from("staff_members")
@@ -33,7 +46,7 @@ export async function addStaffMember(formData: FormData) {
     .select("id")
     .single();
 
-  if (error) throw new Error(`追加に失敗しました: ${error.message}`);
+  if (error) throw userFacingError(error.message, "追加に失敗しました");
 
   if (inserted) {
     await logAction(
@@ -81,14 +94,15 @@ export async function assignStaff(propertyId: string, staffMemberId: string | nu
     }
   }
 
+  // HIGH H3: id だけでなく organization_id でもフィルタする (多層防御)。
   const { error } = await supabase
     .from("properties")
     .update({ staff_member_id: staffMemberId })
-    .eq("id", propertyId);
+    .eq("id", propertyId)
+    .eq("organization_id", membership.organization_id);
 
   if (error) {
-    console.error("[assignStaff] update failed:", error.message);
-    throw new Error("担当者の割り当てに失敗しました");
+    throw userFacingError(error.message, "担当者の割り当てに失敗しました");
   }
 
   await logAction(

@@ -10,13 +10,47 @@ import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
 
-os.environ["API_KEY"] = "test-key"
-from core.config import settings
-settings.api_key = "test-key"  # 既にロード済みでも上書き (テスト順序依存を排除)
-from main import app
 
-client = TestClient(app)
-HEADERS = {"X-API-Key": "test-key", "X-Organization-Id": "org-test"}
+# テスト用 fixed UUID (router の UUID 形式バリデーションを満たす)
+TEST_ORG_ID = "11111111-1111-1111-1111-111111111111"
+TEST_API_KEY = "test-key"
+
+
+@pytest.fixture(scope="session")
+def app_instance(tmp_path_factory):
+    """API_KEY を環境変数経由で設定してから FastAPI app を import する。
+
+    モジュールトップレベルで os.environ をいじって import するパターンは、
+    テスト間の状態漏れ・順序依存・並列実行不能の温床なので fixture に閉じ込める。
+    """
+    # 環境変数を tests セッションスコープで確定させる
+    prev = os.environ.get("API_KEY")
+    os.environ["API_KEY"] = TEST_API_KEY
+    try:
+        # settings はモジュールロード時に評価されるため、既にロードされていれば上書きする
+        from core.config import settings
+        settings.api_key = TEST_API_KEY
+        from main import app
+        yield app
+    finally:
+        if prev is None:
+            os.environ.pop("API_KEY", None)
+        else:
+            os.environ["API_KEY"] = prev
+
+
+@pytest.fixture(scope="session")
+def client(app_instance):
+    return TestClient(app_instance)
+
+
+@pytest.fixture(scope="session")
+def settings_obj(app_instance):
+    from core.config import settings
+    return settings
+
+
+HEADERS = {"X-API-Key": TEST_API_KEY, "X-Organization-Id": TEST_ORG_ID}
 
 
 def _fake_pdf(pages: int = 1):
@@ -28,23 +62,34 @@ def _fake_pdf(pages: int = 1):
     return m
 
 
-def test_health():
+def test_health(client):
     res = client.get("/health")
     assert res.status_code == 200
     assert res.json()["status"] == "ok"
 
 
-def test_parse_pdf_invalid_key():
+def test_parse_pdf_invalid_key(client):
     fake_pdf = io.BytesIO(b"%PDF-1.4 fake")
     res = client.post(
         "/pdf/parse",
-        headers={"X-API-Key": "wrong-key", "X-Organization-Id": "org-test"},
+        headers={"X-API-Key": "wrong-key", "X-Organization-Id": TEST_ORG_ID},
         files={"file": ("test.pdf", fake_pdf, "application/pdf")},
     )
     assert res.status_code == 401
 
 
-def test_parse_pdf_rejects_non_pdf():
+def test_parse_pdf_rejects_invalid_org_id(client):
+    """UUID 形式でない X-Organization-Id は 400 で拒否される (v1.1 ハードニング)。"""
+    fake_pdf = io.BytesIO(b"%PDF-1.4 fake")
+    res = client.post(
+        "/pdf/parse",
+        headers={"X-API-Key": TEST_API_KEY, "X-Organization-Id": "not-a-uuid"},
+        files={"file": ("test.pdf", fake_pdf, "application/pdf")},
+    )
+    assert res.status_code == 400
+
+
+def test_parse_pdf_rejects_non_pdf(client):
     res = client.post(
         "/pdf/parse",
         headers=HEADERS,
@@ -53,7 +98,7 @@ def test_parse_pdf_rejects_non_pdf():
     assert res.status_code == 415
 
 
-def test_parse_pdf_rejects_empty_file():
+def test_parse_pdf_rejects_empty_file(client):
     res = client.post(
         "/pdf/parse",
         headers=HEADERS,
@@ -62,8 +107,8 @@ def test_parse_pdf_rejects_empty_file():
     assert res.status_code == 400
 
 
-def test_parse_pdf_rejects_oversize():
-    too_big = b"%PDF-" + b"0" * (settings.max_upload_bytes + 10)
+def test_parse_pdf_rejects_oversize(client, settings_obj):
+    too_big = b"%PDF-" + b"0" * (settings_obj.max_upload_bytes + 10)
     res = client.post(
         "/pdf/parse",
         headers=HEADERS,
@@ -72,12 +117,17 @@ def test_parse_pdf_rejects_oversize():
     assert res.status_code == 413
 
 
-def test_parse_pdf_success():
+def test_parse_pdf_success(client):
     mock_rows = [
         {"邸名": "西尾 友成", "契約NO": "001", "工種": "木工事", "税抜金額": 161028,
          "消費税": 16103, "税込金額": 177131, "備考": "", "事業所": "本社"},
     ]
-    mock_totals = {"furikomi": 10933813, "sousai": 0}
+    mock_totals = {
+        "furikomi": 10933813,
+        "sousai": 0,
+        "pdf_koujidai_zeinuki": None,
+        "pdf_koujidai_zeikomi": None,
+    }
 
     with patch("routers.pdf.pdfplumber.open", return_value=_fake_pdf()), \
          patch("routers.pdf.extract_rows", return_value=mock_rows), \
@@ -100,10 +150,13 @@ def test_parse_pdf_success():
     assert data["properties"][0]["amount_sales"] == 161028
 
 
-def test_parse_pdf_image_pdf_returns_422():
+def test_parse_pdf_image_pdf_returns_422(client):
     with patch("routers.pdf.pdfplumber.open", return_value=_fake_pdf()), \
          patch("routers.pdf.extract_rows", return_value=None), \
-         patch("routers.pdf.extract_totals", return_value={"furikomi": None, "sousai": None}), \
+         patch("routers.pdf.extract_totals", return_value={
+             "furikomi": None, "sousai": None,
+             "pdf_koujidai_zeinuki": None, "pdf_koujidai_zeikomi": None,
+         }), \
          patch("routers.pdf.extract_payment_date", return_value=None):
 
         fake_pdf = io.BytesIO(b"%PDF-1.4 fake")

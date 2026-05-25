@@ -401,9 +401,6 @@ services:
       AI_ENABLED: ${AI_ENABLED:-false}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      # Internal Supabase URL (kong is the gateway inside the network)
-      SUPABASE_URL: http://kong:8000
-      SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
       DEBUG: "false"
     volumes:
       - api-data:/app/data

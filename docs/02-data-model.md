@@ -1,5 +1,20 @@
 # 02. データモデル
 
+## Recent changes (post-init migrations)
+
+| 日付 | マイグレーション | 内容 |
+|---|---|---|
+| 2026-05-04 | `20260504000000_add_amount_tatekae.sql` | `properties.amount_tatekae` (立替金・非課税) を追加。税抜逆算の補正に使用 |
+| 2026-05-10 | `20260510000000_add_consumption_tax_columns.sql` | `properties.amount_*_tax` (sales/shaho/seisanka/material 各カテゴリの消費税) を追加 |
+| 2026-05-01 | `20260501000600_ai_classification.sql` | `property_lines` に `classification_confidence` / `classification_method` 追加。`ai_classifications` テーブル新設 (AI 呼び出し履歴) |
+| 2026-05-19 | `20260519000000_security_hardening.sql` | 自動 membership 撤廃、`memberships` 書き込みポリシー、関数の search_path 固定など |
+| 2026-05-25 | `20260525000000_property_lines_tatekae_category.sql` | `property_lines.category` の CHECK に `tatekae` を追加 |
+| 2026-05-25 | `20260525000010_handle_new_user_no_automembership.sql` | 既存環境への security_hardening 再適用 |
+| 2026-05-25 | `20260525000050_parse_reaper_job.sql` | `parse_status='parsing'` の停滞行を 15 分後に `failed` 降格する関数 |
+
+> ⚠️ `classification_corrections` テーブルは未実装。`09-ai-classification.md` の "Future" セクション参照。
+> 現状の AI 履歴は `ai_classifications` (上記マイグレーション参照) で扱う。
+
 ## 業務用語の対応表
 
 実装前に必ず把握すること。日本語→英語のマッピング：
@@ -29,15 +44,20 @@
 
 ```
 organizations (1) ──────< (M) memberships >── (M) ────── (1) users
-     │                                                       
-     │                                                       
-     ├──< (M) staff_members                                 
-     │                                                       
+     │
+     ├──< (M) staff_members
+     │
      ├──< (M) payment_notices ──< (M) properties ──< (M) property_lines
-     │                                                       
-     ├──< (M) monthly_memos                                 
-     │                                                       
-     └──< (M) audit_logs                                    
+     │                                                          │
+     │                                                          └──< (M) ai_classifications
+     │
+     ├──< (M) monthly_memos
+     │
+     └──< (M) audit_logs
+
+将来追加予定 (未実装):
+  - classification_corrections : 人間が AI/ルール結果を修正した履歴 (Few-shot 用)
+  - classification_rules       : 承認された追加ルール (Phase 9)
 ```
 
 ## テーブル定義
@@ -131,6 +151,14 @@ create index on payment_notices(organization_id, report_month);
 create index on payment_notices(organization_id, parse_status);
 ```
 
+**parse_status の遷移**:
+`pending` → (Python API 呼び出し開始) → `parsing` → (成功) → `completed`
+                                              └── (失敗) → `failed`
+
+> `parsing` で 15 分以上停滞したレコードは `reap_stale_parse_status()` 関数
+> (マイグレーション `20260525000050_parse_reaper_job.sql`) で `failed` に降格する。
+> 詳細は `docs/12-operations.md` 参照。
+
 ### properties
 邸ごとの集計値。1 payment_notice に対して N 邸。
 
@@ -145,11 +173,22 @@ create table properties (
   contract_no text,                            -- 契約NO（補助）
   work_summary text,                           -- 工事名称サマリ（例: 防水・柱脚）
 
-  -- ①〜④集計値
-  amount_sales numeric not null default 0,     -- ①税抜
+  -- ①〜④集計値 (税抜)
+  amount_sales numeric not null default 0,     -- ①税抜 (一般売上、立替金分を含む)
   amount_shaho numeric not null default 0,     -- ②社保
   amount_seisanka numeric not null default 0,  -- ③生産課
   amount_material numeric not null default 0,  -- ④材料費
+
+  -- 立替金（非課税）。amount_sales に含まれるが税抜逆算 (÷1.1) しないための補正用。
+  -- 20260504 追加。
+  amount_tatekae numeric not null default 0,
+
+  -- カテゴリ別 消費税 (進化版 / 20260510 追加)
+  -- 各カテゴリの税抜額に対応する消費税を別カラムで保持する。
+  amount_sales_tax    numeric not null default 0,
+  amount_shaho_tax    numeric not null default 0,
+  amount_seisanka_tax numeric not null default 0,
+  amount_material_tax numeric not null default 0,
 
   -- 計算列（DBではトリガー or アプリ層で計算）
   amount_gross_profit numeric generated always as
@@ -189,8 +228,13 @@ create table property_lines (
   note text,                                   -- 備考
 
   -- 振り分け先（自動判定結果）
-  category text not null,                      -- 'sales' | 'shaho' | 'seisanka' | 'material'
+  -- 20260525 から 'tatekae' (立替金) を追加。
+  category text not null,                      -- 'sales' | 'shaho' | 'seisanka' | 'material' | 'tatekae'
   is_manually_overridden boolean not null default false,
+
+  -- AI 分類機能 (20260501 追加)
+  classification_confidence numeric(3,2),      -- 0.00 - 1.00。null=未判定
+  classification_method text,                  -- 'rule' | 'ai' | 'manual' | null
 
   sort_order integer not null,
   created_at timestamptz not null default now()
@@ -231,6 +275,36 @@ create table audit_logs (
 
 create index on audit_logs(organization_id, created_at desc);
 ```
+
+### ai_classifications
+
+AI 再分類の呼び出し履歴。デバッグ・コスト把握用 (20260501 追加)。
+
+```sql
+create table ai_classifications (
+  id uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references organizations(id) on delete cascade,
+  property_line_id uuid references property_lines(id) on delete set null,
+
+  prompt_input jsonb not null,    -- { work_type, amount, note, ... }
+  ai_response jsonb,              -- { category, confidence, reasoning }
+  model text not null,            -- 'claude-haiku-4-5' など
+  input_tokens integer,
+  output_tokens integer,
+  latency_ms integer,
+  error text,                     -- エラー時のメッセージ
+
+  created_at timestamptz not null default now()
+);
+
+create index ai_classifications_org_created_idx
+  on ai_classifications(organization_id, created_at desc);
+create index ai_classifications_line_idx
+  on ai_classifications(property_line_id);
+```
+
+> **未実装**: `09-ai-classification.md` で言及される `classification_corrections` と
+> `classification_rules` テーブルは未作成。Phase 9 候補。
 
 ## RLS（Row Level Security）ポリシー
 

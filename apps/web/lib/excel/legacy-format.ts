@@ -5,6 +5,24 @@
  *
  * 邸数 (n_tei) は動的（18邸を基準とし、超過時は拡張）。
  * シート構成・セル位置・数式・条件付き書式は既存ツールに合わせて再現する。
+ *
+ * TODO (L1): このファイルは 800 行に近づいている。下記単位で
+ *   apps/web/lib/excel/parts/ 配下に分割するとレビュー負荷が下がる:
+ *   - write-title.ts (writeTitle, writeColumnHeaders)
+ *   - write-data-rows.ts (writeDataRows, writeSumRow, writeBottomTotals)
+ *   - write-staff-summary.ts (writeStaffSummary, writeTantoTeisu)
+ *   - write-reconciliation.ts (writeTransferReconciliation, writeMonthlyMemo)
+ *   - format-helpers.ts (numberOrZero, formatYyyyMmDdSlash, formatYyyymmdd,
+ *     formatJapaneseMonth, formatSheetName, buildLegacyFileName, computeColumnSum)
+ *  共通定数 (DATA_START_ROW, NUMBER_FORMAT 等) は constants.ts に切り出し。
+ *  数式 result の整合性テストを追加するタイミングと一緒に行うのが望ましい。
+ *
+ * TODO (test): Vitest/Jest が未導入のためユニットテスト未追加。
+ *   テストフレームワーク導入後、最低限 buildLegacyWorkbook の以下を検証する:
+ *   - 18邸未満入力で 18 行ぶんの空行枠が確保されること
+ *   - SUM 系セルの result が実値と一致すること (今回の修正点)
+ *   - formatSheetName / buildLegacyFileName の境界値
+ *   - 担当邸数 (O5-O9) の計算結果
  */
 
 import ExcelJS from "exceljs";
@@ -147,14 +165,50 @@ function buildSheet(sheet: ExcelJS.Worksheet, input: LegacyExportInput): void {
   writeTitle(sheet, input);
   writeColumnHeaders(sheet);
   writeDataRows(sheet, input.properties, dataLastRow);
-  writeSumRow(sheet, sumRow, dataLastRow);
-  writeBottomTotals(sheet, sumRow, dataLastRow);
-  writeStaffSummary(sheet, sumRow, dataLastRow, staffOptions);
-  writeTantoTeisu(sheet, dataLastRow, staffOptions);
+  writeSumRow(sheet, sumRow, dataLastRow, input.properties);
+  writeBottomTotals(sheet, sumRow, dataLastRow, input.properties);
+  writeStaffSummary(sheet, sumRow, dataLastRow, staffOptions, input.properties);
+  writeTantoTeisu(sheet, dataLastRow, staffOptions, input.properties);
   writeTransferReconciliation(sheet, sumRow, input);
   writeMonthlyMemo(sheet, sumRow, input.monthlyMemo);
   applyDataValidation(sheet, dataLastRow, staffOptions);
   applyConditionalFormatting(sheet, dataLastRow, usedRowCount, staffOptions);
+}
+
+// ----------------------------------------------------------------------
+// 集計ヘルパ（数式の result に実値を入れることで、開いた瞬間に正しい値が見える）
+// ----------------------------------------------------------------------
+
+function computeColumnSum(
+  properties: LegacyPropertyRow[],
+  col: "D" | "E" | "F" | "G" | "H" | "I" | "J"
+): number {
+  return properties.reduce((acc, p) => {
+    switch (col) {
+      case "D":
+        return acc + numberOrZero(p.amountSales);
+      case "E":
+        return acc + numberOrZero(p.amountShaho);
+      case "F":
+        return acc + numberOrZero(p.amountSeisanka);
+      case "G":
+        return acc + numberOrZero(p.amountMaterial);
+      case "H":
+        return acc + numberOrZero(p.amountSubcontractKobayashi);
+      case "I":
+        return acc + numberOrZero(p.amountSubcontractMinami);
+      case "J": {
+        const gp =
+          numberOrZero(p.amountSales) -
+          numberOrZero(p.amountShaho) -
+          numberOrZero(p.amountSeisanka) -
+          numberOrZero(p.amountMaterial) -
+          numberOrZero(p.amountSubcontractKobayashi) -
+          numberOrZero(p.amountSubcontractMinami);
+        return acc + Math.floor(gp);
+      }
+    }
+  }, 0);
 }
 
 // ----------------------------------------------------------------------
@@ -324,9 +378,10 @@ function writeDataRows(
 function writeSumRow(
   sheet: ExcelJS.Worksheet,
   sumRow: number,
-  dataLastRow: number
+  dataLastRow: number,
+  properties: LegacyPropertyRow[]
 ): void {
-  const cols: Array<{ col: string; needsRoundDown?: boolean }> = [
+  const cols: Array<{ col: "D" | "E" | "F" | "G" | "H" | "I" | "J"; needsRoundDown?: boolean }> = [
     { col: "D" },
     { col: "E" },
     { col: "F" },
@@ -338,15 +393,16 @@ function writeSumRow(
 
   for (const { col, needsRoundDown } of cols) {
     const cell = sheet.getCell(`${col}${sumRow}`);
+    const computed = computeColumnSum(properties, col);
     if (needsRoundDown) {
       cell.value = {
         formula: `ROUNDDOWN(SUM(${col}${DATA_START_ROW}:${col}${dataLastRow}),0)`,
-        result: 0,
+        result: Math.floor(computed),
       };
     } else {
       cell.value = {
         formula: `SUM(${col}${DATA_START_ROW}:${col}${dataLastRow})`,
-        result: 0,
+        result: computed,
       };
     }
     cell.numFmt = NUMBER_FORMAT;
@@ -357,9 +413,12 @@ function writeSumRow(
 
   // L列: 粗利率 = IFERROR(J/D, "")
   const lCell = sheet.getCell(`L${sumRow}`);
+  const sumD = computeColumnSum(properties, "D");
+  const sumJ = Math.floor(computeColumnSum(properties, "J"));
+  const rate = sumD > 0 ? sumJ / sumD : 0;
   lCell.value = {
     formula: `IFERROR(J${sumRow}/D${sumRow},"")`,
-    result: 0,
+    result: rate,
   };
   lCell.numFmt = PERCENT_FORMAT;
   lCell.font = { bold: true };
@@ -370,7 +429,8 @@ function writeSumRow(
 function writeBottomTotals(
   sheet: ExcelJS.Worksheet,
   sumRow: number,
-  dataLastRow: number
+  dataLastRow: number,
+  properties: LegacyPropertyRow[]
 ): void {
   // 売上合計ラベル: C{sum_row}（仕様書 docs/07-excel-export.md:55）
   sheet.getCell(`C${sumRow}`).value = "売上合計";
@@ -385,9 +445,16 @@ function writeBottomTotals(
   sheet.mergeCells(`E${labelRow}:H${labelRow}`);
 
   const iCell = sheet.getCell(`I${labelRow}`);
+  // E〜I 列の合計（社保 + 生産課 + 材料費 + 外注小林 + 外注南）
+  const expensesSum =
+    computeColumnSum(properties, "E") +
+    computeColumnSum(properties, "F") +
+    computeColumnSum(properties, "G") +
+    computeColumnSum(properties, "H") +
+    computeColumnSum(properties, "I");
   iCell.value = {
     formula: `SUM(E${DATA_START_ROW}:I${dataLastRow})`,
-    result: 0,
+    result: expensesSum,
   };
   iCell.numFmt = NUMBER_FORMAT;
   iCell.font = { bold: true };
@@ -407,7 +474,8 @@ function writeStaffSummary(
   sheet: ExcelJS.Worksheet,
   sumRow: number,
   dataLastRow: number,
-  staffOptions: readonly string[]
+  staffOptions: readonly string[],
+  properties: LegacyPropertyRow[]
 ): void {
   const startRow = sumRow + 5;
 
@@ -417,9 +485,23 @@ function writeStaffSummary(
     sheet.getCell(`K${r}`).font = { bold: true };
     sheet.getCell(`K${r}`).alignment = { horizontal: "center" };
 
+    // 班長別の粗利合計 (J列) を計算
+    const staffGrossProfit = properties
+      .filter((p) => (p.staffName ?? "") === staff)
+      .reduce((acc, p) => {
+        const gp =
+          numberOrZero(p.amountSales) -
+          numberOrZero(p.amountShaho) -
+          numberOrZero(p.amountSeisanka) -
+          numberOrZero(p.amountMaterial) -
+          numberOrZero(p.amountSubcontractKobayashi) -
+          numberOrZero(p.amountSubcontractMinami);
+        return acc + Math.floor(gp);
+      }, 0);
+
     sheet.getCell(`L${r}`).value = {
       formula: `SUMIF(K${DATA_START_ROW}:K${dataLastRow},K${r},J${DATA_START_ROW}:J${dataLastRow})`,
-      result: 0,
+      result: staffGrossProfit,
     };
     sheet.getCell(`L${r}`).numFmt = NUMBER_FORMAT;
     sheet.getCell(`L${r}`).alignment = { horizontal: "right" };
@@ -433,7 +515,8 @@ function writeStaffSummary(
 function writeTantoTeisu(
   sheet: ExcelJS.Worksheet,
   dataLastRow: number,
-  staffOptions: readonly string[]
+  staffOptions: readonly string[],
+  properties: LegacyPropertyRow[]
 ): void {
   const { titleCell, headerRow, staffStartRow, unassignedRow, totalRow } =
     TANTO_TEISU_RANGE;
@@ -458,26 +541,37 @@ function writeTantoTeisu(
   sheet.getCell(`N${totalRow}`).value = "合計";
   sheet.getCell(`N${totalRow}`).font = { bold: true };
 
+  // 各班長別の邸数を事前計算
+  const staffCounts = firstThree.map(
+    (name) => properties.filter((p) => (p.staffName ?? "") === name).length
+  );
+
+  // 未入力 = 物件名が埋まっていて班長が未指定の数
+  const unassignedCount = properties.filter(
+    (p) => (p.propertyName ?? "") !== "" && !(p.staffName && p.staffName.length > 0)
+  ).length;
+
   // O5:O7 = COUNTIF(K5:K{n}, N{r})
-  for (const r of staffRows) {
+  staffRows.forEach((r, idx) => {
     sheet.getCell(`O${r}`).value = {
       formula: `COUNTIF(K${DATA_START_ROW}:K${dataLastRow},N${r})`,
-      result: 0,
+      result: firstThree[idx] ? staffCounts[idx] : 0,
     };
     sheet.getCell(`O${r}`).alignment = { horizontal: "right" };
-  }
+  });
 
   // O8 = COUNTA(B5:B{n}) - COUNTIF(K5:K{n},"<>")
   sheet.getCell(`O${unassignedRow}`).value = {
     formula: `COUNTA(B${DATA_START_ROW}:B${dataLastRow})-COUNTIF(K${DATA_START_ROW}:K${dataLastRow},"<>")`,
-    result: 0,
+    result: unassignedCount,
   };
   sheet.getCell(`O${unassignedRow}`).alignment = { horizontal: "right" };
 
   // O9 = SUM(O5:O8)
+  const totalCount = staffCounts.reduce((acc, n) => acc + n, 0) + unassignedCount;
   sheet.getCell(`O${totalRow}`).value = {
     formula: `SUM(O${staffStartRow}:O${unassignedRow})`,
-    result: 0,
+    result: totalCount,
   };
   sheet.getCell(`O${totalRow}`).alignment = { horizontal: "right" };
   sheet.getCell(`O${totalRow}`).font = { bold: true };
@@ -507,8 +601,8 @@ function writeTransferReconciliation(
     [`B${startRow + 2}`, "② 税込相殺(PDF・手入力)", offsetInclTax],
     [`B${startRow + 3}`, "③ 税込工事代計(① − ②)", { formula: `D${startRow + 1}-D${startRow + 2}`, result: transferAmount - offsetInclTax }],
     [`B${startRow + 4}`, "④ 税抜逆算(③ ÷ 1.1)", { formula: `ROUND(D${startRow + 3}/1.1,0)`, result: Math.round((transferAmount - offsetInclTax) / 1.1) }],
-    [`B${startRow + 5}`, `⑤ Excel税抜合計(J${sumRow})`, { formula: `J${sumRow}`, result: 0 }],
-    [`B${startRow + 6}`, "⑥ 差額(⑤ − ④)", { formula: `D${startRow + 5}-D${startRow + 4}`, result: 0 }],
+    [`B${startRow + 5}`, `⑤ Excel税抜合計(J${sumRow})`, { formula: `J${sumRow}`, result: Math.floor(computeColumnSum(input.properties, "J")) }],
+    [`B${startRow + 6}`, "⑥ 差額(⑤ − ④)", { formula: `D${startRow + 5}-D${startRow + 4}`, result: Math.floor(computeColumnSum(input.properties, "J")) - Math.round((transferAmount - offsetInclTax) / 1.1) }],
   ];
 
   for (const [labelAddr, label, value] of labels) {

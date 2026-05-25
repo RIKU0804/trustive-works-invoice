@@ -17,8 +17,12 @@ export default async function ExportPage() {
     .order("report_month", { ascending: false });
 
   const months = Array.from(
-    new Set((notices ?? []).map((n) => n.report_month).filter(Boolean))
-  ) as string[];
+    new Set(
+      (notices ?? [])
+        .map((n) => n.report_month)
+        .filter((m): m is string => typeof m === "string" && m.length > 0)
+    )
+  );
 
   return (
     <div className="space-y-6 max-w-2xl">

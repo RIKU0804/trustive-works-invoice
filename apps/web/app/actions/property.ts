@@ -5,6 +5,7 @@ import { z } from "zod";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getCallerContext } from "@/lib/auth/membership";
 import { logAction } from "@/lib/audit";
+import { userFacingError } from "@/lib/api-errors";
 import type { Database } from "@/lib/supabase/types";
 
 type PropertyUpdate = Database["public"]["Tables"]["properties"]["Update"];
@@ -84,13 +85,16 @@ export async function updateProperty(input: UpdatePropertyInput): Promise<void> 
 
   const changedFields = Object.keys(patch).filter((k) => k !== "updated_at");
 
+  // HIGH H3: service_role でクロスオーグ更新を防ぐため、id だけでなく
+  // organization_id でも明示的にフィルタする (多層防御)。
   const { error: updateError } = await serviceClient
     .from("properties")
     .update(patch)
-    .eq("id", propertyId);
+    .eq("id", propertyId)
+    .eq("organization_id", membership.organization_id);
 
   if (updateError) {
-    throw new Error(`更新に失敗しました: ${updateError.message}`);
+    throw userFacingError(updateError.message, "更新に失敗しました");
   }
 
   await logAction(

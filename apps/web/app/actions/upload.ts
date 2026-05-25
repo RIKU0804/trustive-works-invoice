@@ -1,11 +1,16 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { z } from "zod";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getCallerContext } from "@/lib/auth/membership";
 import { parsePdf } from "@/lib/python-api/client";
 import type { ClassifiedLine, ParseResponse } from "@/lib/python-api/types";
 import { logAction } from "@/lib/audit";
+import { userFacingError } from "@/lib/api-errors";
+import { logger } from "@/lib/logger";
+import { consumeToken } from "@/lib/rate-limit";
+import type { Json } from "@/lib/supabase/types";
 
 function parseJapaneseDate(s: string | null | undefined): string | null {
   if (!s) return null;
@@ -15,13 +20,60 @@ function parseJapaneseDate(s: string | null | undefined): string | null {
   return `${y}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}`;
 }
 
+// HIGH H3 (Json): Record<string, unknown> を Supabase Insert の Json 型へ
+// 型ガードで写像する。`as never` の unsafe cast を排除。
+function toJson(value: unknown): Json {
+  // 既知の primitives と plain object / array のみ通す。
+  if (value === null) return null;
+  const t = typeof value;
+  if (t === "string" || t === "number" || t === "boolean") {
+    return value as Json;
+  }
+  if (Array.isArray(value)) {
+    return value.map(toJson) as Json;
+  }
+  if (t === "object") {
+    const out: { [k: string]: Json } = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (v === undefined) continue;
+      out[k] = toJson(v);
+    }
+    return out;
+  }
+  // 関数 / シンボル等は捨てる
+  return null;
+}
+
+// HIGH: formData の as string を Zod 検証で置き換える。
+const overrideMonthSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "対象月の指定が不正です");
+
+function readStringField(formData: FormData, key: string): string | null {
+  const v = formData.get(key);
+  return typeof v === "string" && v.length > 0 ? v : null;
+}
+
 export async function uploadPdf(formData: FormData) {
+  const { user, membership } = await getCallerContext();
+  const orgId = membership.organization_id;
+
+  // MEDIUM M3: 組織あたり 1 時間 20 件のアップロード上限。
+  // Python API は重い + Storage 容量保護。シングルインスタンス前提の暫定実装。
+  if (!consumeToken(`upload:${orgId}`, { capacity: 20, refillPerHour: 20 })) {
+    throw new Error(
+      "アップロード回数の上限に達しました。しばらくお待ちください。"
+    );
+  }
+
   const serviceClient = createServiceClient();
 
-  const { user, membership } = await getCallerContext();
-
-  const file = formData.get("file") as File;
-  if (!file || file.type !== "application/pdf") {
+  const fileRaw = formData.get("file");
+  if (!(fileRaw instanceof File)) {
+    throw new Error("PDFファイルを選択してください");
+  }
+  const file = fileRaw;
+  if (file.type !== "application/pdf") {
     throw new Error("PDFファイルを選択してください");
   }
   // 50MB上限（Storage バケット制限と一致）
@@ -49,7 +101,7 @@ export async function uploadPdf(formData: FormData) {
   // 制御文字 (CR/LF/NUL/DEL 等) を除去し長さを 255 に制限する。
   // → 後段の Content-Disposition / createSignedUrl(download) への
   //    ヘッダインジェクションを防止する (クロスレビュー M6)。
-  const rawName = (formData.get("originalFileName") as string) || file.name;
+  const rawName = readStringField(formData, "originalFileName") ?? file.name;
   const originalFileName =
     Array.from(rawName)
       .filter((ch) => {
@@ -62,12 +114,16 @@ export async function uploadPdf(formData: FormData) {
       .slice(0, 255) || "uploaded.pdf";
 
   // 対象月の手動指定（PDFの解析結果より優先）
-  const overrideReportMonth = (formData.get("overrideReportMonth") as string) || null;
-  if (overrideReportMonth && !/^\d{4}-\d{2}-\d{2}$/.test(overrideReportMonth)) {
-    throw new Error("対象月の指定が不正です");
+  const overrideRaw = readStringField(formData, "overrideReportMonth");
+  let overrideReportMonth: string | null = null;
+  if (overrideRaw !== null) {
+    const parsed = overrideMonthSchema.safeParse(overrideRaw);
+    if (!parsed.success) {
+      throw new Error("対象月の指定が不正です");
+    }
+    overrideReportMonth = parsed.data;
   }
 
-  const orgId = membership.organization_id;
   const timestamp = Date.now();
   const safeFileName = file.name
     .replace(/[^\w.-]/g, "_")
@@ -80,7 +136,12 @@ export async function uploadPdf(formData: FormData) {
     .from("payment-notices")
     .upload(storagePath, file, { contentType: "application/pdf" });
 
-  if (storageError) throw new Error(`ストレージエラー: ${storageError.message}`);
+  if (storageError) {
+    throw userFacingError(
+      `[upload] storage upload failed: ${storageError.message}`,
+      "ストレージへのアップロードに失敗しました"
+    );
+  }
 
   const { data: notice, error: insertError } = await serviceClient
     .from("payment_notices")
@@ -95,7 +156,12 @@ export async function uploadPdf(formData: FormData) {
     .select()
     .single();
 
-  if (insertError || !notice) throw new Error("DBエラー: 記録の作成に失敗しました");
+  if (insertError || !notice) {
+    throw userFacingError(
+      `[upload] insert payment_notices failed: ${insertError?.message ?? "unknown"}`,
+      "記録の作成に失敗しました"
+    );
+  }
 
   await logAction(
     serviceClient,
@@ -175,7 +241,10 @@ export async function uploadPdf(formData: FormData) {
         .select("id, sort_order");
       if (linesError) {
         // 行レベル保存の失敗は致命的ではない（properties は保存済）。warn ログのみ。
-        console.warn(`[upload] property_lines insert error: ${linesError.message}`);
+        logger.warn("upload_property_lines_insert_failed", {
+          notice_id: notice.id,
+          reason: linesError.message,
+        });
       } else {
         insertedLineIds = insertedLines ?? [];
       }
@@ -189,8 +258,9 @@ export async function uploadPdf(formData: FormData) {
       const aiInserts = parsed.ai_classifications.map((rec) => ({
         organization_id: orgId,
         property_line_id: lineIdByIndex.get(rec.line_index) ?? null,
-        prompt_input: rec.prompt_input as never, // Json 互換扱い
-        ai_response: (rec.ai_response ?? null) as never,
+        // HIGH H3: `as never` を排除し、Supabase の Json 型へ安全に写像する。
+        prompt_input: toJson(rec.prompt_input),
+        ai_response: toJson(rec.ai_response),
         model: rec.model,
         input_tokens: rec.input_tokens,
         output_tokens: rec.output_tokens,
@@ -201,10 +271,14 @@ export async function uploadPdf(formData: FormData) {
         .from("ai_classifications")
         .insert(aiInserts);
       if (aiError) {
-        console.warn(`[upload] ai_classifications insert error: ${aiError.message}`);
+        logger.warn("upload_ai_classifications_insert_failed", {
+          notice_id: notice.id,
+          reason: aiError.message,
+        });
       }
     }
 
+    // HIGH H3: id と organization_id の両方で絞り込む (多層防御)。
     const { error: updateError } = await serviceClient
       .from("payment_notices")
       .update({
@@ -219,14 +293,21 @@ export async function uploadPdf(formData: FormData) {
             ? isoPaymentDate.slice(0, 7) + "-01"
             : notice.report_month),
       })
-      .eq("id", notice.id);
+      .eq("id", notice.id)
+      .eq("organization_id", orgId);
     if (updateError) throw new Error(`通知更新エラー: ${updateError.message}`);
   } catch (e) {
     const msg = e instanceof Error ? e.message : "解析失敗";
+    logger.error("upload_parse_failed", {
+      notice_id: notice.id,
+      reason: msg,
+    });
+    // HIGH H3: 失敗時の status 更新でも organization_id を絞り込みに含める。
     await serviceClient
       .from("payment_notices")
       .update({ parse_status: "failed", parse_error: msg })
-      .eq("id", notice.id);
+      .eq("id", notice.id)
+      .eq("organization_id", orgId);
   }
 
   redirect(`/preview/${notice.id}`);

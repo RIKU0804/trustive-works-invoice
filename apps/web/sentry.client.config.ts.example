@@ -1,0 +1,25 @@
+// Sentry (client) - DISABLED by default.
+//
+// このファイルは雛形 (`.example`)。エラー監視を有効にしたい時だけ
+// `.example` を外して `sentry.client.config.ts` にリネームすること。
+//
+// 有効化手順:
+//   1. `cd apps/web && npm install @sentry/nextjs`
+//   2. このファイルから `.example` を削除
+//   3. Vercel/環境変数に `NEXT_PUBLIC_SENTRY_DSN` を設定
+//   4. `next.config.mjs` を Sentry 公式の `withSentryConfig(...)` で包む
+//      (CSP は別エージェントが管理しているため、ここでは触らない)
+//
+// Free tier (5K events/month) で現状運用には十分。
+//
+// TODO: enable Sentry – see apps/web/sentry.*.config.ts.example + README
+
+import * as Sentry from "@sentry/nextjs";
+
+Sentry.init({
+  dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
+  tracesSampleRate: 0.1,
+  // 個人情報や PDF 中身が誤って送信されるのを防ぐ
+  sendDefaultPii: false,
+  environment: process.env.NEXT_PUBLIC_VERCEL_ENV ?? "development",
+});

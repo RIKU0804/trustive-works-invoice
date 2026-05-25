@@ -36,7 +36,9 @@ export default async function PreviewPage({ params }: { params: { id: string } }
 
   const { data: notice } = await supabase
     .from("payment_notices")
-    .select("*")
+    .select(
+      "id, file_name, uploaded_at, parse_status, parse_error, payment_date, transfer_amount, offset_incl_tax"
+    )
     .eq("id", params.id)
     .eq("organization_id", membership.organization_id)
     .single();
@@ -45,7 +47,24 @@ export default async function PreviewPage({ params }: { params: { id: string } }
 
   const { data: properties } = await supabase
     .from("properties")
-    .select("*, staff_members(name)")
+    .select(
+      `id,
+       property_name,
+       contract_no,
+       work_summary,
+       amount_sales,
+       amount_shaho,
+       amount_seisanka,
+       amount_material,
+       amount_sales_tax,
+       amount_shaho_tax,
+       amount_seisanka_tax,
+       amount_material_tax,
+       amount_tatekae,
+       amount_gross_profit,
+       staff_member_id,
+       staff_members ( id, name )`
+    )
     .eq("payment_notice_id", params.id)
     .eq("organization_id", membership.organization_id)
     .order("property_name");
@@ -200,8 +219,8 @@ export default async function PreviewPage({ params }: { params: { id: string } }
                 </thead>
                 <tbody className="divide-y">
                   {properties?.map((p) => {
-                    const staffName =
-                      (p as { staff_members?: { name: string } | null }).staff_members?.name ?? "";
+                    const staff = (p.staff_members as { id: string; name: string } | null) ?? null;
+                    const staffName = staff?.name ?? "";
                     return (
                       <tr key={p.id} className="hover:bg-muted/30 align-top">
                         <td className="px-3 py-2">{p.property_name}</td>

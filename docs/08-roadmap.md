@@ -11,8 +11,8 @@
 | P2 | PDFアップロード→Python API連携→プレビュー→DB保存 | 1〜2週 |
 | P3 | 担当者マスタ＋割り当てUI | 1週 |
 | P4 | ダッシュボード＋邸一覧＋検索 | 1〜2週 |
-| **P5** | **AI分類機能（並列バリデーション）** | **1週** |
-| P6 | Excel出力（両フォーマット） | 1週 |
+| **P5** | **AI分類機能（並列バリデーション）** | **Done** (ルール + AI バッチのみ、人間フィードバックループは未実装) |
+| P6 | Excel出力 | **Done** (`legacy.xlsx` + CSV のみ、`simple.xlsx` は deferred) |
 | P7 | 月次メモ・邸詳細・仕上げ | 1週 |
 | P8 | 社内テスト・本番移行 | 1週 |
 | --- | --- | --- |
@@ -142,56 +142,47 @@ $ curl -X POST https://api.example.com/pdf/parse \
 
 ---
 
-## P5: AI分類機能（並列バリデーション）
+## P5: AI分類機能（並列バリデーション） — **Done (部分)**
 
 **ゴール**: ルールベースとAIの並列バリデーションで、新しい備考表現にも自動適応。
 
-### タスク
+### 実装済み
+- [x] `property_lines.classification_confidence` / `classification_method` カラム
+- [x] `ai_classifications` テーブル (AI 呼び出し履歴・コスト記録)
+- [x] Python API側
+  - [x] httpx 経由の AI 呼び出し (OpenRouter / Anthropic 両対応、`apps/api/services/ai_classifier.py`)
+  - [x] `calculate_rule_confidence` 実装
+  - [x] 並列バリデーションロジック
+- [x] フロント側: 信頼度の表示
+
+### 未実装 (Phase 9 候補)
+- [ ] `classification_corrections` テーブル (人間が AI/ルール結果を修正した履歴)
+- [ ] `fetch_similar_corrections` (Few-shot examples を蓄積データから生成)
+- [ ] 修正履歴に基づく Few-shot プロンプト
+- [ ] 月次コストレポート UI
 
 詳細は [`09-ai-classification.md`](./09-ai-classification.md) 参照。
 
-- [ ] DBテーブル追加
-  - [ ] `classification_corrections`
-  - [ ] `classification_logs`
-- [ ] Python API側
-  - [ ] Anthropic SDK セットアップ
-  - [ ] `calculate_rule_confidence` 実装
-  - [ ] `classify_by_claude` 実装
-  - [ ] `fetch_similar_corrections` 実装
-  - [ ] 並列バリデーションロジック
-- [ ] フロント側
-  - [ ] S05 プレビュー画面に信頼度アイコン追加
-  - [ ] needs_review の行をデフォルト展開
-  - [ ] AI判定理由の表示
-  - [ ] 修正履歴の自動記録
-- [ ] コスト監視
-  - [ ] `classification_logs` に料金記録
-  - [ ] 月次レポート機能（簡易）
-- [ ] テスト
-  - [ ] 既知パターン → AIに送られない
-  - [ ] 未知パターン → AIに送られて正しく分類
-  - [ ] AI失敗時のフォールバック
-
-### 完了条件
-
-- 「中口応援補填」など見慣れない表現を含むPDFを処理して、AIが正しく③に分類する
-- ルールとAIが一致する行は自動で確定、不一致の行はUIで強調表示
-- 修正履歴がDBに溜まり、次回以降のAI判定でFew-shot使用される
+### 現状の挙動
+- 「中口応援補填」など見慣れない表現を含むPDFを処理して、AIが正しく③に分類する ✅
+- ルールとAIが一致する行は自動で確定、不一致の行はUIで強調表示 ✅
+- 修正履歴がDBに溜まり、次回以降のAI判定でFew-shot使用される ⛔ **(未実装)**
 
 ---
 
-## P6: Excel出力
+## P6: Excel出力 — **Done (部分)**
 
 **ゴール**: 既存フォーマット・シンプル両方のExcelがダウンロードできる。
 
-### タスク
+### 実装済み
+- [x] ExcelJS導入
+- [x] `exportLegacy()`: 既存フォーマット再現
+- [x] CSV 出力
+- [x] `app/api/excel/export/route.ts`
+- [x] `S11 Excel出力画面`
 
-- [ ] ExcelJS導入
-- [ ] `lib/excel/exporter.ts` 実装
-  - [ ] `exportLegacy()` ：既存フォーマット再現
-  - [ ] `exportSimple()` ：シンプル一覧
-- [ ] `app/api/excel/export/route.ts`
-- [ ] `S11 Excel出力画面`
+### 未実装 / Deferred
+- [ ] `exportSimple()`: シンプル一覧 (`simple.xlsx`) — CSV で代替中、当面 deferred
 
 ---
 

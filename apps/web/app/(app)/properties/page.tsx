@@ -24,8 +24,12 @@ export default async function PropertiesPage({ searchParams }: Props) {
     .order("report_month", { ascending: false });
 
   const uniqueMonths = Array.from(
-    new Set((months ?? []).map((m) => m.report_month).filter(Boolean))
-  ) as string[];
+    new Set(
+      (months ?? [])
+        .map((m) => m.report_month)
+        .filter((m): m is string => typeof m === "string" && m.length > 0)
+    )
+  );
 
   const selectedMonth = searchParams.month ?? uniqueMonths[0] ?? null;
 

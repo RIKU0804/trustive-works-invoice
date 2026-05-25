@@ -1,11 +1,16 @@
+import { env } from "@/lib/env";
 import type { ParseResponse } from "./types";
 
-const API_URL = process.env.PYTHON_API_URL!;
-const API_KEY = process.env.PYTHON_API_KEY!;
+const API_URL = env.PYTHON_API_URL;
+const API_KEY = env.PYTHON_API_KEY;
 
 // PDF 解析 + AI 分類は時間がかかりうるが、ハングした上流で Server Action /
 // Node ソケットが無限に占有されるのを防ぐため上限を設ける。
-const REQUEST_TIMEOUT_MS = 180_000;
+//
+// 補足: Vercel Hobby は 60s、Pro は 300s の Function timeout 上限がある。
+// 上流の Python API が極端に遅い時にも Function 上限内で諦められるよう
+// 120s を採用する (Hobby では実質 60s が上限になるが、明示的にタイムアウトする)。
+const REQUEST_TIMEOUT_MS = 120_000;
 // 上流が暴走して巨大ボディを返した場合のメモリ保護 (32MB)
 const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 
@@ -26,7 +31,9 @@ export async function parsePdf(file: File, organizationId: string): Promise<Pars
     });
   } catch (e) {
     if (e instanceof DOMException && e.name === "TimeoutError") {
-      throw new Error("解析サーバの応答がタイムアウトしました");
+      throw new Error(
+        `解析サーバの応答がタイムアウトしました (上限 ${REQUEST_TIMEOUT_MS / 1000}秒)`
+      );
     }
     throw new Error("解析サーバに接続できませんでした");
   }

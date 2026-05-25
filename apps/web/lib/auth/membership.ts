@@ -15,7 +15,13 @@ import { createClient } from "@/lib/supabase/server";
  * を追加する。呼び出し側はこのモジュール経由でのみ membership を解決すること。
  */
 
-export type CallerRole = "owner" | "admin" | "member";
+// HIGH H4: DB から流れてきた role 文字列を unsafe cast せず、型ガードで検証する。
+const VALID_ROLES = ["owner", "admin", "member"] as const;
+export type CallerRole = (typeof VALID_ROLES)[number];
+
+function isValidRole(s: string): s is CallerRole {
+  return (VALID_ROLES as readonly string[]).includes(s);
+}
 
 export interface CallerMembership {
   id: string;
@@ -58,6 +64,10 @@ export async function resolveCaller(): Promise<CallerResult> {
   const m = rows?.[0];
   if (!m) return { kind: "no-membership" };
 
+  if (!isValidRole(m.role)) {
+    return { kind: "error", message: `invalid role in DB: ${m.role}` };
+  }
+
   return {
     kind: "ok",
     ctx: {
@@ -67,7 +77,7 @@ export async function resolveCaller(): Promise<CallerResult> {
         id: m.id,
         user_id: m.user_id,
         organization_id: m.organization_id,
-        role: m.role as CallerRole,
+        role: m.role,
       },
     },
   };

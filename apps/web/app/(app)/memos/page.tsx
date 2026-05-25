@@ -18,8 +18,12 @@ export default async function MemosPage() {
     .order("report_month", { ascending: false });
 
   const months = Array.from(
-    new Set((notices ?? []).map((n) => n.report_month).filter(Boolean))
-  ) as string[];
+    new Set(
+      (notices ?? [])
+        .map((n) => n.report_month)
+        .filter((m): m is string => typeof m === "string" && m.length > 0)
+    )
+  );
 
   const { data: memos } = await supabase
     .from("monthly_memos")

@@ -56,6 +56,13 @@ const ZOOM_LEVELS = [0.5, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75];
 const DEFAULT_ZOOM = 1.0;
 const ZOOM_STORAGE_KEY = "invoice-saas2:month-zoom";
 
+/**
+ * 表示列の数 (No, 顧客名, 工事名称, ①税抜, ②社保, ③生産課, ④材料費, ⑦粗利, 班長, 粗利率)。
+ * キーボード移動の右端判定に使う。列を増減した場合はここを更新する。
+ */
+const COLUMN_COUNT = 10;
+const MAX_COL_INDEX = COLUMN_COUNT - 1;
+
 function rateColor(rate: number): string {
   if (rate >= 0.4) return "text-green-700 font-semibold";
   if (rate >= 0.3) return "text-blue-700";
@@ -78,6 +85,7 @@ export function MonthGrid({
   const [activeCell, setActiveCell] = useState<{ row: number; col: number } | null>(null);
   const [showHelp, setShowHelp] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const helpRef = useRef<HTMLDivElement>(null);
   const [, startTransition] = useTransition();
   const [optimisticRows, updateRows] = useOptimistic(
     rows,
@@ -147,14 +155,24 @@ export function MonthGrid({
     return () => el.removeEventListener("wheel", handler);
   }, []);
 
-  // ヘルプポップオーバーを Esc / 外クリックで閉じる
+  // ヘルプポップオーバーを Esc / 外クリックで閉じる。
+  // mousedown ベースの外クリック検出に切り替え（onBlur+setTimeout はモバイル/タッチで不安定）。
   useEffect(() => {
     if (!showHelp) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setShowHelp(false);
     };
+    const onMouseDown = (e: MouseEvent) => {
+      if (helpRef.current && !helpRef.current.contains(e.target as Node)) {
+        setShowHelp(false);
+      }
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onMouseDown);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.removeEventListener("mousedown", onMouseDown);
+    };
   }, [showHelp]);
 
   const filteredRows = useMemo(() => {
@@ -196,7 +214,7 @@ export function MonthGrid({
     let nc = col;
     if (e.key === "ArrowDown") nr = Math.min(sortedRows.length - 1, row + 1);
     else if (e.key === "ArrowUp") nr = Math.max(0, row - 1);
-    else if (e.key === "ArrowRight") nc = Math.min(8, col + 1);
+    else if (e.key === "ArrowRight") nc = Math.min(MAX_COL_INDEX, col + 1);
     else if (e.key === "ArrowLeft") nc = Math.max(0, col - 1);
     else return;
     e.preventDefault();
@@ -272,11 +290,10 @@ export function MonthGrid({
           </button>
 
           {/* ヘルプ（キーボードショートカット） */}
-          <div className="relative ml-1">
+          <div className="relative ml-1" ref={helpRef}>
             <button
               type="button"
               onClick={() => setShowHelp((v) => !v)}
-              onBlur={() => setTimeout(() => setShowHelp(false), 150)}
               className="flex items-center justify-center rounded border w-7 h-7 hover:bg-white"
               aria-label="キーボードショートカット"
               aria-expanded={showHelp}

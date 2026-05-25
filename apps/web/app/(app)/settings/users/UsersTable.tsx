@@ -1,9 +1,11 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { updateMemberRole, removeMember } from "@/app/actions/members";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import type { CallerRole } from "@/lib/auth/membership";
 
-type MemberRole = "owner" | "admin" | "member";
+type MemberRole = CallerRole;
 
 interface MemberRow {
   membershipId: string;
@@ -44,6 +46,12 @@ function RoleSelect({
   const [selectedRole, setSelectedRole] = useState<MemberRole>(currentRole);
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const pendingChangeRef = useRef<{
+    previous: MemberRole;
+    next: MemberRole;
+  } | null>(null);
+  const selectRef = useRef<HTMLSelectElement>(null);
 
   const availableRoles =
     currentUserRole === "owner" ? ROLE_OPTIONS : ROLE_OPTIONS.filter((r) => r !== "owner");
@@ -54,26 +62,41 @@ function RoleSelect({
 
     if (newRole === previousRole) return;
 
-    const confirmed = confirm(
-      `${email} の役割を ${ROLE_LABELS[previousRole]} → ${ROLE_LABELS[newRole]} に変更しますか？`
-    );
-    if (!confirmed) {
-      // ユーザーがキャンセルした場合、selectの値を元に戻す
-      e.target.value = previousRole;
+    pendingChangeRef.current = { previous: previousRole, next: newRole };
+    // 確認待ちの間、UI上の select は古い値に戻しておく
+    e.target.value = previousRole;
+    setConfirmOpen(true);
+  }
+
+  function handleConfirm() {
+    const pending = pendingChangeRef.current;
+    if (!pending) {
+      setConfirmOpen(false);
       return;
     }
-
+    pendingChangeRef.current = null;
+    setConfirmOpen(false);
     setError(null);
-    setSelectedRole(newRole);
+    setSelectedRole(pending.next);
     startTransition(async () => {
       try {
-        await updateMemberRole(membershipId, newRole);
+        await updateMemberRole(membershipId, pending.next);
       } catch (err) {
         setError(err instanceof Error ? err.message : "更新に失敗しました");
-        // 失敗時は元のロールへ復元
-        setSelectedRole(previousRole);
+        setSelectedRole(pending.previous);
       }
     });
+  }
+
+  function handleCancel(open: boolean) {
+    if (!open) {
+      pendingChangeRef.current = null;
+      // select の表示値も元に戻す
+      if (selectRef.current) {
+        selectRef.current.value = selectedRole;
+      }
+    }
+    setConfirmOpen(open);
   }
 
   if (isDisabled) {
@@ -84,9 +107,14 @@ function RoleSelect({
     );
   }
 
+  const confirmMessage = pendingChangeRef.current
+    ? `${email} の役割を ${ROLE_LABELS[pendingChangeRef.current.previous]} → ${ROLE_LABELS[pendingChangeRef.current.next]} に変更しますか？`
+    : "";
+
   return (
     <div className="flex flex-col gap-1">
       <select
+        ref={selectRef}
         value={selectedRole}
         onChange={handleChange}
         disabled={isPending}
@@ -99,6 +127,15 @@ function RoleSelect({
         ))}
       </select>
       {error && <p className="text-xs text-destructive">{error}</p>}
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={handleCancel}
+        title="役割を変更しますか？"
+        message={confirmMessage}
+        confirmLabel="変更する"
+        onConfirm={handleConfirm}
+        isPending={isPending}
+      />
     </div>
   );
 }
@@ -112,10 +149,11 @@ function RemoveButton({
 }) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const name = displayName ?? "このメンバー";
 
-  function handleClick() {
-    const name = displayName ?? "このメンバー";
-    if (!confirm(`${name}を削除しますか？`)) return;
+  function handleConfirm() {
+    setConfirmOpen(false);
     setError(null);
     startTransition(async () => {
       try {
@@ -129,13 +167,23 @@ function RemoveButton({
   return (
     <div className="flex flex-col gap-1 items-end">
       <button
-        onClick={handleClick}
+        onClick={() => setConfirmOpen(true)}
         disabled={isPending}
         className="text-xs text-destructive hover:underline disabled:opacity-50"
       >
         {isPending ? "削除中..." : "削除"}
       </button>
       {error && <p className="text-xs text-destructive">{error}</p>}
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title="メンバーを削除しますか？"
+        message={`${name}を削除しますか？`}
+        confirmLabel="削除する"
+        variant="destructive"
+        onConfirm={handleConfirm}
+        isPending={isPending}
+      />
     </div>
   );
 }

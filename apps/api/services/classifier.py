@@ -185,9 +185,11 @@ def aggregate_classified_lines(lines: list[dict]) -> list[AggregatedProperty]:
 
 
 def classify_and_aggregate(rows: list[dict]) -> list[AggregatedProperty]:
-    """後方互換 API: rows をルールベースで分類して直接集計する。
+    """テスト用ヘルパー: ルールベース分類 + 集計を 1 関数で実行する。
 
-    既存テスト・既存呼び出し元のシグネチャを維持する。
+    本番経路 (routers.pdf._build_response) では使わない。
+    classify_row → classify_low_confidence_rows → aggregate_classified_lines の
+    3 段を 1 関数で代用するため、AI 再分類は経由しない。
     """
     classified: list[dict] = []
     for row in rows:
@@ -202,7 +204,7 @@ def classify_and_aggregate(rows: list[dict]) -> list[AggregatedProperty]:
     return aggregate_classified_lines(classified)
 
 
-def _finalize_aggregate(by_tei: dict) -> list[AggregatedProperty]:
+def _finalize_aggregate(by_tei: dict[str, dict]) -> list[AggregatedProperty]:
     result = []
     for tei, agg in by_tei.items():
         amount_sales = sum(agg["D_items"])

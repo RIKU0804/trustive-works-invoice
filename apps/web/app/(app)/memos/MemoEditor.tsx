@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { upsertMemo } from "@/app/actions/memo";
 
@@ -12,7 +12,6 @@ interface MemoEditorProps {
 export function MemoEditor({ reportMonth, initialContent }: MemoEditorProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [pending, setPending] = useState(false);
-  const formRef = useRef<HTMLFormElement>(null);
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -46,7 +45,7 @@ export function MemoEditor({ reportMonth, initialContent }: MemoEditorProps) {
   }
 
   return (
-    <form ref={formRef} onSubmit={handleSubmit} className="space-y-2">
+    <form onSubmit={handleSubmit} className="space-y-2">
       <input type="hidden" name="reportMonth" value={reportMonth} />
       <textarea
         name="content"

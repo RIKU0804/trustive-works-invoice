@@ -1,0 +1,17 @@
+// Next.js instrumentation entry - DISABLED by default.
+//
+// 有効化手順 (sentry.*.config.ts.example と一緒に):
+//   1. `.example` を外して `instrumentation.ts` にする
+//   2. `npm install @sentry/nextjs`
+//   3. `NEXT_PUBLIC_SENTRY_DSN` / `SENTRY_DSN` を環境変数に設定
+//
+// TODO: enable Sentry – see README "Error tracking (Sentry)" section.
+
+export async function register() {
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    await import("./sentry.server.config");
+  }
+  if (process.env.NEXT_RUNTIME === "edge") {
+    await import("./sentry.edge.config");
+  }
+}

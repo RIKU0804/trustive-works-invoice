@@ -1,0 +1,58 @@
+"""Sentry (Python API) - DISABLED by default.
+
+このファイルは雛形 (`.example`)。エラー監視を有効にしたい時だけ
+`.example` を外して `core/sentry.py` にリネームすること。
+
+有効化手順:
+    1. requirements.txt と pyproject.toml に `sentry-sdk[fastapi]==2.*` を追加
+    2. このファイルから `.example` を削除
+    3. Railway/環境変数に `SENTRY_DSN` を設定
+    4. main.py で:
+           from core.sentry import init_sentry
+           init_sentry()  # FastAPI() の前に呼ぶ
+
+PDF の内容や API キーが Sentry に送信されないよう
+send_default_pii=False, before_send で payload を sanitize すること。
+
+Free tier (5K events/month) で現状運用には十分。
+"""
+
+from __future__ import annotations
+
+import os
+from typing import Any
+
+# TODO: enable Sentry – `pip install 'sentry-sdk[fastapi]'` の後にコメントを外す
+# import sentry_sdk
+# from sentry_sdk.integrations.fastapi import FastApiIntegration
+
+
+def _scrub_event(event: dict[str, Any], _hint: dict[str, Any]) -> dict[str, Any] | None:
+    """PDF バイト列や API キーを Sentry に送らないためのフィルタ。"""
+    # request body / headers から secret を落とす
+    request = event.get("request") or {}
+    headers = request.get("headers") or {}
+    for key in list(headers.keys()):
+        if key.lower() in {"x-api-key", "authorization", "cookie"}:
+            headers[key] = "[Filtered]"
+    # PDF アップロードのバイト列を送らない
+    if "data" in request:
+        request["data"] = "[Filtered]"
+    return event
+
+
+def init_sentry() -> None:
+    """Sentry 初期化。DSN 未設定なら何もしない。"""
+    dsn = os.environ.get("SENTRY_DSN", "").strip()
+    if not dsn:
+        return
+
+    # NOTE: 実際に有効化する時は下記コメントを外す。
+    # sentry_sdk.init(
+    #     dsn=dsn,
+    #     environment=os.environ.get("SENTRY_ENV", "production"),
+    #     traces_sample_rate=0.1,
+    #     send_default_pii=False,
+    #     before_send=_scrub_event,
+    #     integrations=[FastApiIntegration()],
+    # )

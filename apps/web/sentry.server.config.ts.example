@@ -1,0 +1,13 @@
+// Sentry (server) - DISABLED by default. See sentry.client.config.ts.example.
+//
+// TODO: enable by removing `.example`, installing `@sentry/nextjs`,
+// and setting SENTRY_DSN in the server environment.
+
+import * as Sentry from "@sentry/nextjs";
+
+Sentry.init({
+  dsn: process.env.SENTRY_DSN ?? process.env.NEXT_PUBLIC_SENTRY_DSN,
+  tracesSampleRate: 0.1,
+  sendDefaultPii: false,
+  environment: process.env.VERCEL_ENV ?? "development",
+});

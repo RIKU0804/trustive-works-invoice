@@ -1,12 +1,18 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { env } from "@/lib/env";
+
+// HIGH H1 sec: /api/* を一括 bypass しない。
+// 明示的に「未認証で叩いて良いパス」のみ allowlist する。
+// 他の /api/* ルートは下記の middleware で認証チェックを通す。
+const PUBLIC_API_PATHS: readonly string[] = ["/api/health"];
 
 export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
 
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    env.NEXT_PUBLIC_SUPABASE_URL,
+    env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
     {
       cookies: {
         getAll() { return request.cookies.getAll(); },
@@ -23,11 +29,16 @@ export async function middleware(request: NextRequest) {
 
   const { data: { user } } = await supabase.auth.getUser();
 
-  const isAuthRoute = request.nextUrl.pathname.startsWith("/login");
-  const isApiRoute = request.nextUrl.pathname.startsWith("/api");
-  const isCallbackRoute = request.nextUrl.pathname.startsWith("/callback");
+  const { pathname } = request.nextUrl;
+  const isAuthRoute = pathname.startsWith("/login");
+  const isCallbackRoute = pathname.startsWith("/callback");
+  const isPublicApiPath = PUBLIC_API_PATHS.some((p) => pathname === p);
 
-  if (!user && !isAuthRoute && !isApiRoute && !isCallbackRoute) {
+  if (!user && !isAuthRoute && !isCallbackRoute && !isPublicApiPath) {
+    // /api/* も含めて 未認証ならログインへ誘導する。
+    // API は本来 JSON 401 を返すべきだが、middleware で出すと SSR ページとの
+    // 挙動が混在するため、ルートハンドラ側で resolveCaller() による認証チェックも
+    // 多層防御として残す。
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);

@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { resolveCaller } from "@/lib/auth/membership";
 import {
   buildLegacyFileName,
   buildLegacyWorkbook,
   type LegacyPropertyRow,
 } from "@/lib/excel/legacy-format";
+import { logger } from "@/lib/logger";
 
 const XLSX_CONTENT_TYPE =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
@@ -20,28 +22,51 @@ function parseFormat(value: string | null): ExportFormat {
   return "xlsx";
 }
 
-interface PropertyRow {
-  property_name: string | null;
-  contract_no: string | null;
-  work_summary: string | null;
-  amount_sales: number | string | null;
-  amount_shaho: number | string | null;
-  amount_seisanka: number | string | null;
-  amount_material: number | string | null;
+// HIGH H2: `as unknown as PropertyRow[]` の unsafe cast を排除するため、
+// Supabase クエリ結果を Zod で実行時検証する。
+const numStringNull = z.union([z.number(), z.string(), z.null()]);
+
+const staffRelSchema = z.union([
+  z.object({ name: z.string() }),
+  z.array(z.object({ name: z.string() })),
+  z.null(),
+]);
+
+const noticeRelObjectSchema = z.object({
+  report_month: z.string(),
+  payment_date: z.string().nullable(),
+  transfer_amount: numStringNull,
+  offset_incl_tax: numStringNull,
+  file_name: z.string().nullable(),
+});
+
+const noticeRelSchema = z.union([
+  noticeRelObjectSchema,
+  z.array(noticeRelObjectSchema),
+  z.null(),
+]);
+
+const propertyRowSchema = z.object({
+  property_name: z.string().nullable(),
+  contract_no: z.string().nullable(),
+  work_summary: z.string().nullable(),
+  amount_sales: numStringNull,
+  amount_shaho: numStringNull,
+  amount_seisanka: numStringNull,
+  amount_material: numStringNull,
   // 進化版要件 260510: 消費税フィールド
-  amount_sales_tax: number | string | null;
-  amount_shaho_tax: number | string | null;
-  amount_seisanka_tax: number | string | null;
-  amount_material_tax: number | string | null;
-  amount_tatekae: number | string | null;
-  amount_gross_profit: number | string | null;
-  gross_profit_rate: number | string | null;
-  staff_members: { name: string } | { name: string }[] | null;
-  payment_notices:
-    | { report_month: string; payment_date: string | null; transfer_amount: number | string | null; offset_incl_tax: number | string | null; file_name: string | null }
-    | { report_month: string; payment_date: string | null; transfer_amount: number | string | null; offset_incl_tax: number | string | null; file_name: string | null }[]
-    | null;
-}
+  amount_sales_tax: numStringNull,
+  amount_shaho_tax: numStringNull,
+  amount_seisanka_tax: numStringNull,
+  amount_material_tax: numStringNull,
+  amount_tatekae: numStringNull,
+  amount_gross_profit: numStringNull,
+  gross_profit_rate: numStringNull,
+  staff_members: staffRelSchema,
+  payment_notices: noticeRelSchema,
+});
+
+type PropertyRow = z.infer<typeof propertyRowSchema>;
 
 function pickStaffName(rel: PropertyRow["staff_members"]): string | null {
   if (!rel) return null;
@@ -120,7 +145,18 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const properties = (propertiesRaw ?? []) as unknown as PropertyRow[];
+  // HIGH H2: 実行時にスキーマ検証して unsafe cast を排除。
+  const parseResult = z.array(propertyRowSchema).safeParse(propertiesRaw ?? []);
+  if (!parseResult.success) {
+    logger.error("export_schema_validation_failed", {
+      issues: parseResult.error.issues.slice(0, 5),
+    });
+    return NextResponse.json(
+      { error: "データの形式が想定と異なります" },
+      { status: 500 }
+    );
+  }
+  const properties: PropertyRow[] = parseResult.data;
 
   const { data: memoRow } = await supabase
     .from("monthly_memos")

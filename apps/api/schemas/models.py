@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Literal, Optional
 
 
@@ -21,6 +21,9 @@ ClassificationMethod = Literal["rule", "ai", "manual"]
 
 
 class ClassifiedLine(BaseModel):
+    # extra="forbid": スキーマに無いフィールドが入って来たら 422 で弾く (厳格化)
+    model_config = ConfigDict(extra="forbid")
+
     property_name: str
     contract_no: str = ""
     work_type: str = ""
@@ -36,6 +39,8 @@ class ClassifiedLine(BaseModel):
 
 class AIClassification(BaseModel):
     """AI 呼び出し1件分のメタデータ。Next.js 側で ai_classifications テーブルに保存する。"""
+    model_config = ConfigDict(extra="forbid")
+
     line_index: int  # ClassifiedLine の配列インデックスと対応
     prompt_input: dict
     ai_response: Optional[dict] = None
@@ -47,6 +52,8 @@ class AIClassification(BaseModel):
 
 
 class AggregatedProperty(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     property_name: str
     contract_no: str
     koji_label: str
@@ -68,6 +75,8 @@ class AggregatedProperty(BaseModel):
 
 
 class ParseResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     payment_date: Optional[str]
     transfer_amount: Optional[int]
     offset_amount: Optional[int]

@@ -31,8 +31,6 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-haiku-4-5"
 
-    supabase_url: str = ""
-    supabase_service_role_key: str = ""
     debug: bool = False
 
     @property

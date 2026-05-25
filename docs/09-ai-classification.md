@@ -1,5 +1,24 @@
 # 09. AI分類機能（A→C進化型）
 
+## 実装状況サマリ
+
+| 機能 | 状態 |
+|---|---|
+| ルールベース判定 (`classify_by_rules` / `calculate_rule_confidence`) | ✅ 実装済 |
+| Claude (OpenRouter / Anthropic) による AI 分類 | ✅ 実装済 (`apps/api/services/ai_classifier.py`) |
+| 並列バリデーション (ルール + AI を比較して `needs_review` を出す) | ✅ 実装済 |
+| AI 呼び出し履歴の永続化 (`ai_classifications`) | ✅ 実装済 |
+| `property_lines.classification_confidence` / `classification_method` | ✅ 実装済 |
+| 人間の修正履歴蓄積 (`classification_corrections`) | ⛔ **未実装 — Phase 9 候補** |
+| Few-shot プロンプトへの修正履歴反映 | ⛔ **未実装 — Phase 9 候補** |
+| AI ルール提案 (`classification_rules`) | ⛔ **未実装 — Phase 9 候補** |
+| 月次コストレポート UI | ⛔ 未実装 (DB には記録あり) |
+
+> 「人間の修正がフィードバックループで Few-shot に効いてくる」部分は
+> 当初設計のままドキュメント化されているが **まだコードにはない**。
+> 下記の `classification_corrections` / `classification_rules` テーブルは
+> 現状の Supabase スキーマには存在しない。
+
 ## 目的
 
 支払い通知書の備考欄の表現は、作成者が変わるたびに揺れる。
@@ -119,9 +138,13 @@ def build_examples_section(corrections: list[Correction]) -> str:
 
 ## DB追加テーブル
 
-### classification_corrections
+> **注意**: 以下の `classification_corrections` と `classification_rules` は
+> **未実装の将来テーブル** (Phase 9 候補)。現状の Supabase スキーマには存在しない。
+> 実装済みなのは `ai_classifications` (下記) と `property_lines.classification_*` カラムのみ。
 
-人間がAI判定を修正した履歴。Few-shot promptingに使う。
+### Future: classification_corrections （未実装）
+
+人間がAI判定を修正した履歴。Few-shot promptingに使う想定。
 
 ```sql
 create table classification_corrections (
@@ -149,7 +172,7 @@ create index on classification_corrections(organization_id, work_type);
 create index on classification_corrections(organization_id, corrected_at desc);
 ```
 
-### classification_rules
+### Future: classification_rules （未実装）
 
 将来のC案用：ユーザーが承認した追加ルール。
 
@@ -180,9 +203,15 @@ create table classification_rules (
 );
 ```
 
-### classification_logs
+### ai_classifications （実装済）
 
 AI呼び出し履歴（デバッグ・監査・コスト把握用）。
+**注**: 当初は `classification_logs` という名前で設計されていたが、
+実際のマイグレーション (`20260501000600_ai_classification.sql`) では
+`ai_classifications` という名前で作成されている。
+スキーマは `docs/02-data-model.md` の該当節を参照。
+
+下記は当初設計（参考）。実テーブルとはカラム名が異なる。
 
 ```sql
 create table classification_logs (
@@ -274,16 +303,10 @@ async def classify_by_claude(line: PdfRow, examples: list) -> AIResult:
 
 
 async def fetch_similar_corrections(org_id: str, line: PdfRow, limit=5):
-    # 単純な類似度（同じ work_type の修正例を最近順に取得）
-    # フェーズ2では embeddings + pgvector で意味検索に進化させる
-    return await db.fetch("""
-        select work_type, amount_excl_tax, note, human_corrected, reason
-        from classification_corrections
-        where organization_id = $1
-          and work_type = $2
-        order by corrected_at desc
-        limit $3
-    """, org_id, line.work_type, limit)
+    # 未実装: classification_corrections テーブル自体がまだ無い。
+    # Phase 9 で実装予定。現状は空リストを返す扱い。
+    # フェーズ2では embeddings + pgvector で意味検索に進化させる想定。
+    return []
 ```
 
 ## UI仕様

@@ -4,6 +4,8 @@ import { redirect } from "next/navigation";
 import { createServiceClient } from "@/lib/supabase/server";
 import { requireOrgAdmin } from "@/lib/auth/membership";
 import { logAction } from "@/lib/audit";
+import { userFacingError } from "@/lib/api-errors";
+import { logger } from "@/lib/logger";
 
 /**
  * payment_notices を削除する。
@@ -51,20 +53,23 @@ export async function deletePaymentNotice(noticeId: string): Promise<void> {
       .remove([notice.storage_path]);
     if (storageError) {
       // 致命的ではない。Storage に残骸が残るが DB は消す。
-      console.warn(
-        `[deletePaymentNotice] storage remove failed: ${storageError.message}`
-      );
+      logger.warn("payment_notice_storage_remove_failed", {
+        notice_id: notice.id,
+        reason: storageError.message,
+      });
     }
   }
 
   // properties / property_lines は ON DELETE CASCADE 前提
+  // HIGH H3: service_role で削除するので organization_id を必ず併用する。
   const { error: deleteError } = await serviceClient
     .from("payment_notices")
     .delete()
-    .eq("id", notice.id);
+    .eq("id", notice.id)
+    .eq("organization_id", orgId);
 
   if (deleteError) {
-    throw new Error(`削除に失敗しました: ${deleteError.message}`);
+    throw userFacingError(deleteError.message, "削除に失敗しました");
   }
 
   await logAction(

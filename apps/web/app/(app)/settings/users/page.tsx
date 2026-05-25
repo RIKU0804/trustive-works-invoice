@@ -1,8 +1,8 @@
-import { resolveCaller } from "@/lib/auth/membership";
+import { resolveCaller, type CallerRole } from "@/lib/auth/membership";
 import { UsersTable } from "./UsersTable";
 import { InviteForm } from "./InviteForm";
 
-type MemberRole = "owner" | "admin" | "member";
+type MemberRole = CallerRole;
 
 interface MemberRow {
   membershipId: string;

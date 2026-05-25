@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Pencil, Loader2 } from "lucide-react";
+import * as Dialog from "@radix-ui/react-dialog";
+import { Pencil, Loader2, X } from "lucide-react";
 import { updateProperty } from "@/app/actions/property";
 
 /**
@@ -9,6 +10,9 @@ import { updateProperty } from "@/app/actions/property";
  *
  * 数値フィールドは半角数字のみを受け付け、各カテゴリの税抜と消費税を
  * それぞれ編集可能。立替金（非課税・税抜=税込）も編集対象。
+ *
+ * 内部実装: 自前の position:fixed をやめ、@radix-ui/react-dialog で
+ * フォーカストラップ・ESCクローズ・スクロールロックを得る。
  */
 
 interface StaffOption {
@@ -87,14 +91,13 @@ export function PropertyEditDialog({ property, staffOptions }: PropertyEditDialo
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
-  function openDialog() {
-    setValues(toFormValues(property));
-    setError(null);
-    setOpen(true);
-  }
-
-  function closeDialog() {
-    setOpen(false);
+  function handleOpenChange(next: boolean) {
+    if (next) {
+      // 開くときに最新のプロパティから初期化
+      setValues(toFormValues(property));
+      setError(null);
+    }
+    setOpen(next);
   }
 
   function update<K extends keyof FormValues>(key: K, value: FormValues[K]) {
@@ -131,162 +134,156 @@ export function PropertyEditDialog({ property, staffOptions }: PropertyEditDialo
   }
 
   return (
-    <>
-      <button
-        type="button"
-        onClick={openDialog}
-        className="inline-flex items-center gap-1 rounded border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent hover:text-accent-foreground"
-        aria-label={`${property.property_name} を編集`}
-      >
-        <Pencil className="w-3 h-3" />
-        編集
-      </button>
-
-      {open && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby={`edit-dialog-title-${property.id}`}
-          onClick={(e) => {
-            if (e.target === e.currentTarget) closeDialog();
-          }}
+    <Dialog.Root open={open} onOpenChange={handleOpenChange}>
+      <Dialog.Trigger asChild>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 rounded border border-input bg-background px-2 py-1 text-xs font-medium hover:bg-accent hover:text-accent-foreground"
+          aria-label={`${property.property_name} を編集`}
         >
-          <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-lg bg-background shadow-lg">
-            <form onSubmit={handleSubmit} className="p-6 space-y-4">
-              <div className="flex items-start justify-between gap-4">
-                <h2
-                  id={`edit-dialog-title-${property.id}`}
-                  className="text-lg font-semibold"
-                >
-                  物件データを編集
-                </h2>
+          <Pencil className="w-3 h-3" />
+          編集
+        </button>
+      </Dialog.Trigger>
+
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/40" />
+        <Dialog.Content
+          className="fixed left-1/2 top-1/2 z-50 w-full max-w-2xl max-h-[90vh] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg bg-background shadow-lg focus:outline-none"
+          aria-describedby={undefined}
+        >
+          <form onSubmit={handleSubmit} className="p-6 space-y-4">
+            <div className="flex items-start justify-between gap-4">
+              <Dialog.Title className="text-lg font-semibold">
+                物件データを編集
+              </Dialog.Title>
+              <Dialog.Close asChild>
                 <button
                   type="button"
-                  onClick={closeDialog}
                   className="text-sm text-muted-foreground hover:text-foreground"
                   aria-label="閉じる"
                 >
-                  ✕
+                  <X className="w-4 h-4" />
                 </button>
+              </Dialog.Close>
+            </div>
+
+            {error && (
+              <div className="rounded-md bg-destructive/10 border border-destructive/20 p-3 text-sm text-destructive">
+                {error}
               </div>
+            )}
 
-              {error && (
-                <div className="rounded-md bg-destructive/10 border border-destructive/20 p-3 text-sm text-destructive">
-                  {error}
-                </div>
-              )}
-
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="物件名">
-                  <input
-                    type="text"
-                    value={values.property_name}
-                    onChange={(e) => update("property_name", e.target.value)}
-                    className={inputClass}
-                    required
-                  />
-                </Field>
-                <Field label="契約番号">
-                  <input
-                    type="text"
-                    value={values.contract_no}
-                    onChange={(e) => update("contract_no", e.target.value)}
-                    className={inputClass}
-                  />
-                </Field>
-              </div>
-
-              <Field label="工事概要">
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="物件名">
                 <input
                   type="text"
-                  value={values.work_summary}
-                  onChange={(e) => update("work_summary", e.target.value)}
+                  value={values.property_name}
+                  onChange={(e) => update("property_name", e.target.value)}
+                  className={inputClass}
+                  required
+                />
+              </Field>
+              <Field label="契約番号">
+                <input
+                  type="text"
+                  value={values.contract_no}
+                  onChange={(e) => update("contract_no", e.target.value)}
                   className={inputClass}
                 />
               </Field>
+            </div>
 
-              <Field label="班長">
-                <select
-                  value={values.staff_member_id}
-                  onChange={(e) => update("staff_member_id", e.target.value)}
+            <Field label="工事概要">
+              <input
+                type="text"
+                value={values.work_summary}
+                onChange={(e) => update("work_summary", e.target.value)}
+                className={inputClass}
+              />
+            </Field>
+
+            <Field label="班長">
+              <select
+                value={values.staff_member_id}
+                onChange={(e) => update("staff_member_id", e.target.value)}
+                className={inputClass}
+              >
+                <option value="">未割当</option>
+                {staffOptions.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <fieldset className="rounded-md border p-3 space-y-2">
+              <legend className="px-1 text-xs font-medium">金額（税抜 / 消費税）</legend>
+              <div className="grid grid-cols-2 gap-3">
+                <NumPair
+                  label="①一般売上"
+                  excl={values.amount_sales}
+                  tax={values.amount_sales_tax}
+                  onExcl={(v) => update("amount_sales", v)}
+                  onTax={(v) => update("amount_sales_tax", v)}
+                />
+                <NumPair
+                  label="②社保"
+                  excl={values.amount_shaho}
+                  tax={values.amount_shaho_tax}
+                  onExcl={(v) => update("amount_shaho", v)}
+                  onTax={(v) => update("amount_shaho_tax", v)}
+                />
+                <NumPair
+                  label="③生産課"
+                  excl={values.amount_seisanka}
+                  tax={values.amount_seisanka_tax}
+                  onExcl={(v) => update("amount_seisanka", v)}
+                  onTax={(v) => update("amount_seisanka_tax", v)}
+                />
+                <NumPair
+                  label="④材料費"
+                  excl={values.amount_material}
+                  tax={values.amount_material_tax}
+                  onExcl={(v) => update("amount_material", v)}
+                  onTax={(v) => update("amount_material_tax", v)}
+                />
+              </div>
+              <Field label="立替金（非課税・税抜=税込）">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={values.amount_tatekae}
+                  onChange={(e) => update("amount_tatekae", e.target.value)}
                   className={inputClass}
-                >
-                  <option value="">未割当</option>
-                  {staffOptions.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
+                />
               </Field>
+            </fieldset>
 
-              <fieldset className="rounded-md border p-3 space-y-2">
-                <legend className="px-1 text-xs font-medium">金額（税抜 / 消費税）</legend>
-                <div className="grid grid-cols-2 gap-3">
-                  <NumPair
-                    label="①一般売上"
-                    excl={values.amount_sales}
-                    tax={values.amount_sales_tax}
-                    onExcl={(v) => update("amount_sales", v)}
-                    onTax={(v) => update("amount_sales_tax", v)}
-                  />
-                  <NumPair
-                    label="②社保"
-                    excl={values.amount_shaho}
-                    tax={values.amount_shaho_tax}
-                    onExcl={(v) => update("amount_shaho", v)}
-                    onTax={(v) => update("amount_shaho_tax", v)}
-                  />
-                  <NumPair
-                    label="③生産課"
-                    excl={values.amount_seisanka}
-                    tax={values.amount_seisanka_tax}
-                    onExcl={(v) => update("amount_seisanka", v)}
-                    onTax={(v) => update("amount_seisanka_tax", v)}
-                  />
-                  <NumPair
-                    label="④材料費"
-                    excl={values.amount_material}
-                    tax={values.amount_material_tax}
-                    onExcl={(v) => update("amount_material", v)}
-                    onTax={(v) => update("amount_material_tax", v)}
-                  />
-                </div>
-                <Field label="立替金（非課税・税抜=税込）">
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    value={values.amount_tatekae}
-                    onChange={(e) => update("amount_tatekae", e.target.value)}
-                    className={inputClass}
-                  />
-                </Field>
-              </fieldset>
-
-              <div className="flex justify-end gap-2 pt-2">
+            <div className="flex justify-end gap-2 pt-2">
+              <Dialog.Close asChild>
                 <button
                   type="button"
-                  onClick={closeDialog}
                   disabled={isPending}
                   className="rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
                 >
                   キャンセル
                 </button>
-                <button
-                  type="submit"
-                  disabled={isPending}
-                  className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-                >
-                  {isPending && <Loader2 className="w-4 h-4 animate-spin" />}
-                  保存
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-    </>
+              </Dialog.Close>
+              <button
+                type="submit"
+                disabled={isPending}
+                className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              >
+                {isPending && <Loader2 className="w-4 h-4 animate-spin" />}
+                保存
+              </button>
+            </div>
+          </form>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 
